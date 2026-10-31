@@ -16,27 +16,28 @@ from django.contrib.auth import get_user_model
 from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError
 from django.db import transaction
-from django.db.models import Q, Count
+from django.utils import timezone
+from django.db.models import Q, Count, F
 from rest_framework_simplejwt.views import TokenObtainPairView
 from .emails import enviar_correo_brevo
 
 from rest_framework.permissions import AllowAny
 from .models import (
-    Usuario, Socio, PlanMembresia, MetodoPago, Venta, Producto,
+    Usuario, Socio, PlanMembresia, MetodoPago, Venta, Producto, CategoriaProducto, Proveedor, Compra, DetalleCompra, Administrador, KardexInventario,
     Ejercicio, Rutina, Bitacora,
     DetalleRutina, AsignacionRutina, Entrenador, HorarioEntrenador, Turno,
-    GRUPOS_MUSCULARES,
+    GRUPOS_MUSCULARES, AlertaReposicion,
 )
 from .membresias import asegurar_metodos_pago
 from .serializers import (
-    RegistroUsuarioSerializer, UsuarioSerializer, SocioSerializer,
+    RegistroUsuarioSerializer, UsuarioSerializer, SocioSerializer, CategoriaProductoSerializer, ProveedorSerializer,
     PlanMembresiaSerializer, MetodoPagoSerializer, ContratoMembresiaSerializer,
-    RegistrarContratoMembresiaSerializer, VentaSerializer, ProductoSerializer,
+    RegistrarContratoMembresiaSerializer, VentaSerializer, ProductoSerializer, RegistrarCompraSerializer, CompraLecturaSerializer, RegistrarKardexSerializer, KardexLecturaSerializer,
     EjercicioSerializer, EjercicioListSerializer, RutinaSerializer,
     RutinaConDetallesSerializer, AsignacionRutinaSerializer,
     EntrenadorSerializer, RegistrarEntrenadorSerializer,
     HorarioEntrenadorSerializer, TurnoSerializer,
-    LoginSerializer,
+    LoginSerializer, AlertaReposicionSerializer,
     BitacoraSerializer, RegistrarSocioSerializer,
 )
 
@@ -575,10 +576,236 @@ class VentaViewSet(viewsets.ModelViewSet):
     serializer_class = VentaSerializer
 
 class ProductoViewSet(viewsets.ModelViewSet):
-    queryset = Producto.objects.all()
+    """CU12: catálogo de productos comerciales.
+
+    Administrador: CRUD. Recepcionista: solo consulta. El stock y el costo
+    promedio son de solo lectura y se actualizarán desde CU08/CU14/CU15.
+    """
+    queryset = Producto.objects.select_related('id_categoria').order_by('nombre_producto')
     serializer_class = ProductoSerializer
 
+    def get_permissions(self):
+        if self.action in ('list', 'retrieve'):
+            return [EsAdministradorORecepcionista()]
+        return [EsAdministrador()]
+
+    def perform_create(self, serializer):
+        producto = serializer.save()
+        registrar_bitacora(
+            self.request, 'CREATE', 'producto',
+            f"'{self.request.user.username}' creó el producto '{producto.nombre_producto}'.",
+            usuario=self.request.user,
+        )
+
+    def perform_update(self, serializer):
+        producto = serializer.save()
+        registrar_bitacora(
+            self.request, 'UPDATE', 'producto',
+            f"'{self.request.user.username}' actualizó el producto '{producto.nombre_producto}'.",
+            usuario=self.request.user,
+        )
+
+    def perform_destroy(self, instance):
+        # No eliminar productos con historial comercial o de inventario.
+        from .models import DetalleCompra, DetalleVentaProducto, KardexInventario
+        if (DetalleCompra.objects.filter(id_producto=instance).exists()
+                or DetalleVentaProducto.objects.filter(id_producto=instance).exists()
+                or KardexInventario.objects.filter(id_producto=instance).exists()):
+            raise serializers.ValidationError(
+                {'detail': 'No se puede eliminar: el producto tiene historial de compras, ventas o Kardex. Puede cambiar su estado a Inactivo.'}
+            )
+        nombre = instance.nombre_producto
+        instance.delete()
+        registrar_bitacora(
+            self.request, 'DELETE', 'producto',
+            f"'{self.request.user.username}' eliminó el producto '{nombre}'.",
+            usuario=self.request.user,
+        )
+
+
+class CategoriaProductoViewSet(viewsets.ModelViewSet):
+    """CU11: CRUD de categorías. Solo el administrador puede gestionarlas."""
+    queryset = CategoriaProducto.objects.select_related('id_subcategoria').order_by('nombre_categoria')
+    serializer_class = CategoriaProductoSerializer
+    permission_classes = [EsAdministrador]
+
+    def perform_create(self, serializer):
+        categoria = serializer.save()
+        registrar_bitacora(
+            self.request, 'CREATE', 'categoria_producto',
+            f"'{self.request.user.username}' creó la categoría '{categoria.nombre_categoria}'.",
+            usuario=self.request.user,
+        )
+
+    def perform_update(self, serializer):
+        categoria = serializer.save()
+        registrar_bitacora(
+            self.request, 'UPDATE', 'categoria_producto',
+            f"'{self.request.user.username}' actualizó la categoría '{categoria.nombre_categoria}'.",
+            usuario=self.request.user,
+        )
+
+    def perform_destroy(self, instance):
+        if Producto.objects.filter(id_categoria=instance).exists():
+            from rest_framework.exceptions import ValidationError
+            raise ValidationError({'detail': 'No se puede eliminar: la categoría tiene productos asociados.'})
+        if CategoriaProducto.objects.filter(id_subcategoria=instance).exists():
+            from rest_framework.exceptions import ValidationError
+            raise ValidationError({'detail': 'No se puede eliminar: la categoría tiene subcategorías asociadas.'})
+        nombre = instance.nombre_categoria
+        instance.delete()
+        registrar_bitacora(
+            self.request, 'DELETE', 'categoria_producto',
+            f"'{self.request.user.username}' eliminó la categoría '{nombre}'.",
+            usuario=self.request.user,
+        )
+
 # ----------------------------------------------------------------------------
+
+
+class ProveedorViewSet(viewsets.ModelViewSet):
+    """CU13: administración de proveedores para el módulo comercial."""
+    queryset = Proveedor.objects.all().order_by('razon_social')
+    serializer_class = ProveedorSerializer
+
+    def get_permissions(self):
+        if self.action in ('list', 'retrieve'):
+            return [EsAdministradorORecepcionista()]
+        return [EsAdministrador()]
+
+    def perform_create(self, serializer):
+        proveedor = serializer.save()
+        registrar_bitacora(
+            self.request, 'CREATE', 'proveedor',
+            f"'{self.request.user.username}' registró al proveedor '{proveedor.razon_social}' (NIT {proveedor.nit}).",
+            usuario=self.request.user,
+        )
+
+    def perform_update(self, serializer):
+        proveedor = serializer.save()
+        registrar_bitacora(
+            self.request, 'UPDATE', 'proveedor',
+            f"'{self.request.user.username}' actualizó al proveedor '{proveedor.razon_social}' (NIT {proveedor.nit}).",
+            usuario=self.request.user,
+        )
+
+    def perform_destroy(self, instance):
+        if Compra.objects.filter(id_proveedor=instance).exists():
+            raise serializers.ValidationError(
+                {'detail': 'No se puede eliminar este proveedor porque tiene compras registradas.'}
+            )
+        razon_social = instance.razon_social
+        nit = instance.nit
+        instance.delete()
+        registrar_bitacora(
+            self.request, 'DELETE', 'proveedor',
+            f"'{self.request.user.username}' eliminó al proveedor '{razon_social}' (NIT {nit}).",
+            usuario=self.request.user,
+        )
+
+
+class CompraViewSet(viewsets.ModelViewSet):
+    """CU14: registro y consulta de compras. Solo administradores."""
+    queryset = Compra.objects.select_related(
+        'id_proveedor', 'id_administrador__id_administrador'
+    ).prefetch_related('detallecompra_set__id_producto').order_by('-fecha_hora', '-id_compra')
+    http_method_names = ['get', 'post', 'head', 'options']
+
+    def get_permissions(self):
+        return [EsAdministrador()]
+
+    def get_serializer_class(self):
+        if self.action == 'create':
+            return RegistrarCompraSerializer
+        return CompraLecturaSerializer
+
+    def perform_create(self, serializer):
+        compra = serializer.save()
+        registrar_bitacora(
+            self.request, 'CREATE', 'compra',
+            f"'{self.request.user.username}' registró la compra #{compra.id_compra} "
+            f"por {compra.monto_total_local} BOB al proveedor '{compra.id_proveedor.razon_social}'.",
+            usuario=self.request.user,
+        )
+
+
+
+
+class KardexViewSet(viewsets.ModelViewSet):
+    """CU15: consulta del historial y registro de movimientos extraordinarios."""
+    queryset = KardexInventario.objects.select_related('id_producto').order_by('-fecha_movimiento', '-id_kardex')
+    http_method_names = ['get', 'post', 'head', 'options']
+
+    def get_permissions(self):
+        return [EsAdministrador()]
+
+    def get_serializer_class(self):
+        if self.action == 'create':
+            return RegistrarKardexSerializer
+        return KardexLecturaSerializer
+
+    def perform_create(self, serializer):
+        movimiento = serializer.save()
+        signo = '+' if movimiento.tipo_movimiento in ('INGRESO', 'AJUSTE_POSITIVO') else '-'
+        registrar_bitacora(
+            self.request, 'CREATE', 'kardex_inventario',
+            f"'{self.request.user.username}' registró {movimiento.tipo_movimiento} de {movimiento.cantidad} unidad(es) "
+            f"del producto '{movimiento.id_producto.nombre_producto}' (variación {signo}{movimiento.cantidad}). Motivo: {movimiento.motivo}.",
+            usuario=self.request.user,
+        )
+
+
+
+
+# CU16: MONITOREAR ALERTAS DE REPOSICION
+class AlertaReposicionViewSet(viewsets.ReadOnlyModelViewSet):
+    serializer_class = AlertaReposicionSerializer
+
+    def get_permissions(self):
+        return [EsRecepcionistaOAdministrador()]
+
+    def get_queryset(self):
+        # Sincroniza alertas pendientes con el stock actual, evitando duplicados.
+        # Una alerta cerrada no se vuelve a abrir automáticamente.
+        if self.request.user.es_administrador:
+            administrador, _ = Administrador.objects.get_or_create(id_administrador=self.request.user)
+            for producto in Producto.objects.filter(estado__iexact='Activo', stock_actual__lte=F('stock_minimo')):
+                pendiente = AlertaReposicion.objects.filter(id_producto=producto, estado_alerta='Pendiente').first()
+                if not pendiente:
+                    urgencia = 'Agotado' if producto.stock_actual <= 0 else 'Bajo'
+                    sugerida = max(1, (producto.stock_maximo or producto.stock_minimo * 2) - producto.stock_actual)
+                    AlertaReposicion.objects.create(id_admin=administrador, id_producto=producto,
+                        nivel_urgencia=urgencia, cantidad_sugerida=sugerida)
+                else:
+                    urgencia = 'Agotado' if producto.stock_actual <= 0 else 'Bajo'
+                    pendiente.nivel_urgencia = urgencia
+                    pendiente.cantidad_sugerida = max(1, (producto.stock_maximo or producto.stock_minimo * 2) - producto.stock_actual)
+                    pendiente.save(update_fields=['nivel_urgencia', 'cantidad_sugerida'])
+            # Si el stock se recuperó, cierra automáticamente la alerta pendiente.
+            AlertaReposicion.objects.filter(estado_alerta='Pendiente', id_producto__stock_actual__gt=F('id_producto__stock_minimo')).update(estado_alerta='Cerrada', fecha_cierre=timezone.now())
+        qs = AlertaReposicion.objects.select_related('id_producto').order_by('-fecha_generacion')
+        estado = self.request.query_params.get('estado')
+        if estado:
+            qs = qs.filter(estado_alerta__iexact=estado)
+        return qs
+
+    @action(detail=True, methods=['post'])
+    def cerrar(self, request, pk=None):
+        if not request.user.es_administrador:
+            return Response({'detail': 'Solo el administrador puede cerrar alertas.'}, status=status.HTTP_403_FORBIDDEN)
+        alerta = self.get_object()
+        if alerta.estado_alerta != 'Pendiente':
+            return Response({'detail': 'La alerta ya está cerrada.'}, status=status.HTTP_400_BAD_REQUEST)
+        if alerta.id_producto.stock_actual <= alerta.id_producto.stock_minimo:
+            return Response({'detail': 'No se puede cerrar: el producto aún está en nivel de reposición.'}, status=status.HTTP_400_BAD_REQUEST)
+        alerta.estado_alerta = 'Cerrada'
+        alerta.fecha_cierre = timezone.now()
+        alerta.save(update_fields=['estado_alerta', 'fecha_cierre'])
+        registrar_bitacora(request, 'UPDATE', 'alerta_reposicion',
+            f"'{request.user.username}' cerró la alerta de reposición del producto '{alerta.id_producto.nombre_producto}'.", usuario=request.user)
+        return Response(self.get_serializer(alerta).data)
+
+
 # CU17: REGISTRAR EJERCICIO
 # Catálogo de ejercicios del gimnasio, con filtrado por grupo muscular.
 # Lectura: cualquier usuario autenticado (el frontend los usa para armar

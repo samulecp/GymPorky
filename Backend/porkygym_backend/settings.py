@@ -8,6 +8,13 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 SECRET_KEY = config('SECRET_KEY')
 DEBUG = config('DEBUG', default=False, cast=bool)
 
+PAYPAL_MODE = config('PAYPAL_MODE', default='sandbox').lower()
+PAYPAL_CLIENT_ID = config('PAYPAL_CLIENT_ID', default='')
+PAYPAL_CLIENT_SECRET = config('PAYPAL_CLIENT_SECRET', default='')
+if PAYPAL_MODE not in ('sandbox', 'live'):
+    raise ValueError('PAYPAL_MODE debe ser sandbox o live.')
+
+
 ALLOWED_HOSTS = [
     host.strip()
     for host in config(

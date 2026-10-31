@@ -8,10 +8,10 @@ from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError
 from django.db import transaction
 from .models import (
-    Usuario, Socio, PlanMembresia, Venta, Producto, Ejercicio, Rutina,
-    Bitacora, MetodoPago, ContratoMembresia,
+    Usuario, Socio, PlanMembresia, Venta, Producto, CategoriaProducto, Proveedor, Compra, DetalleCompra, Administrador, Ejercicio, Rutina,
+    Bitacora, MetodoPago, ContratoMembresia, KardexInventario,
     DetalleRutina, AsignacionRutina, Entrenador, HorarioEntrenador, Turno,
-    GRUPOS_MUSCULARES, NIVELES_RUTINA, DIAS_SEMANA,
+    GRUPOS_MUSCULARES, NIVELES_RUTINA, DIAS_SEMANA, AlertaReposicion,
 )
 from .membresias import (
     crear_contrato_pagado,
@@ -23,6 +23,49 @@ from .membresias import (
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 
 Usuario = get_user_model()
+
+class CategoriaProductoSerializer(serializers.ModelSerializer):
+    """CU11: administración del catálogo de categorías y subcategorías."""
+    id_subcategoria = serializers.PrimaryKeyRelatedField(
+        queryset=CategoriaProducto.objects.all(),
+        required=False,
+        allow_null=True,
+    )
+
+    class Meta:
+        model = CategoriaProducto
+        fields = ['id_categoria', 'nombre_categoria', 'id_subcategoria']
+        read_only_fields = ['id_categoria']
+
+    def validate_nombre_categoria(self, value):
+        nombre = value.strip()
+        if not nombre:
+            raise serializers.ValidationError('El nombre de la categoría es obligatorio.')
+        duplicados = CategoriaProducto.objects.filter(nombre_categoria__iexact=nombre)
+        if self.instance:
+            duplicados = duplicados.exclude(pk=self.instance.pk)
+        if duplicados.exists():
+            raise serializers.ValidationError('Ya existe una categoría con ese nombre.')
+        return nombre
+
+    def validate(self, attrs):
+        padre = attrs.get('id_subcategoria', getattr(self.instance, 'id_subcategoria', None))
+        if self.instance and padre:
+            if padre.pk == self.instance.pk:
+                raise serializers.ValidationError({'id_subcategoria': 'Una categoría no puede ser su propia subcategoría.'})
+            # Evita ciclos: no se puede asignar como padre a uno de sus descendientes.
+            pendientes = [self.instance]
+            visitados = set()
+            while pendientes:
+                actual = pendientes.pop()
+                if actual.pk in visitados:
+                    continue
+                visitados.add(actual.pk)
+                if actual.pk == padre.pk:
+                    raise serializers.ValidationError({'id_subcategoria': 'La relación generaría un ciclo de categorías.'})
+                pendientes.extend(list(CategoriaProducto.objects.filter(id_subcategoria=actual)))
+        return attrs
+
 
 class RegistroUsuarioSerializer(serializers.ModelSerializer):
     password = serializers.CharField(write_only=True, required=True)
@@ -404,10 +447,168 @@ class VentaSerializer(serializers.ModelSerializer):
         model = Venta
         fields = '__all__'
 
+
+
+class RegistrarKardexSerializer(serializers.ModelSerializer):
+    """CU15: movimiento extraordinario de inventario con actualización atómica."""
+    id_producto = serializers.PrimaryKeyRelatedField(queryset=Producto.objects.all())
+    tipo_movimiento = serializers.ChoiceField(choices=[
+        ('INGRESO', 'Ingreso extraordinario'),
+        ('RETIRO', 'Retiro por vencimiento, daño o pérdida'),
+        ('AJUSTE_POSITIVO', 'Ajuste positivo'),
+        ('AJUSTE_NEGATIVO', 'Ajuste negativo'),
+    ])
+    cantidad = serializers.IntegerField(min_value=1)
+    motivo = serializers.CharField(max_length=100, allow_blank=False, trim_whitespace=True)
+
+    class Meta:
+        model = KardexInventario
+        fields = ['id_kardex', 'id_producto', 'tipo_movimiento', 'cantidad', 'motivo', 'fecha_movimiento']
+        read_only_fields = ['id_kardex', 'fecha_movimiento']
+
+    def validate_motivo(self, value):
+        value = value.strip()
+        if not value:
+            raise serializers.ValidationError('El motivo es obligatorio.')
+        return value
+
+    @transaction.atomic
+    def create(self, validated_data):
+        from django.db import transaction as db_transaction
+        request = self.context.get('request')
+        usuario = getattr(request, 'user', None)
+        if not usuario or not usuario.is_authenticated or not usuario.es_administrador:
+            raise serializers.ValidationError('Solo un administrador puede registrar movimientos de Kardex.')
+        producto = Producto.objects.select_for_update().get(pk=validated_data['id_producto'].pk)
+        if producto.estado.lower() != 'activo':
+            raise serializers.ValidationError({'id_producto': 'No se pueden registrar movimientos para un producto inactivo.'})
+        tipo = validated_data['tipo_movimiento']
+        cantidad = validated_data['cantidad']
+        signo = 1 if tipo in ('INGRESO', 'AJUSTE_POSITIVO') else -1
+        nuevo_stock = producto.stock_actual + (signo * cantidad)
+        if nuevo_stock < 0:
+            raise serializers.ValidationError({'cantidad': f'Stock insuficiente. Stock actual: {producto.stock_actual}.'})
+        movimiento = KardexInventario.objects.create(**validated_data)
+        producto.stock_actual = nuevo_stock
+        producto.save(update_fields=['stock_actual'])
+        return movimiento
+
+
+class KardexLecturaSerializer(serializers.ModelSerializer):
+    nombre_producto = serializers.CharField(source='id_producto.nombre_producto', read_only=True)
+
+    class Meta:
+        model = KardexInventario
+        fields = ['id_kardex', 'id_producto', 'nombre_producto', 'fecha_movimiento', 'tipo_movimiento', 'cantidad', 'motivo']
+        read_only_fields = fields
+
+
 class ProductoSerializer(serializers.ModelSerializer):
+    """CU12: catálogo comercial. El stock y el costo promedio se calculan
+    mediante compras, ventas y movimientos extraordinarios de Kardex; nunca
+    se editan directamente desde esta pantalla.
+    """
     class Meta:
         model = Producto
-        fields = '__all__'
+        fields = [
+            'id_producto', 'id_categoria', 'nombre_producto', 'moneda_origen',
+            'precio_base_original', 'precio_venta_local', 'costo_promedio_local',
+            'stock_actual', 'stock_minimo', 'stock_maximo',
+            'clasificacion_abc', 'estado',
+        ]
+        read_only_fields = ['id_producto', 'costo_promedio_local', 'stock_actual']
+
+    def validate_nombre_producto(self, value):
+        nombre = value.strip()
+        if not nombre:
+            raise serializers.ValidationError('El nombre del producto es obligatorio.')
+        categoria = self.initial_data.get('id_categoria')
+        if categoria in (None, '') and self.instance:
+            categoria = self.instance.id_categoria_id
+        duplicados = Producto.objects.filter(nombre_producto__iexact=nombre)
+        if categoria not in (None, ''):
+            duplicados = duplicados.filter(id_categoria_id=categoria)
+        if self.instance:
+            duplicados = duplicados.exclude(pk=self.instance.pk)
+        if duplicados.exists():
+            raise serializers.ValidationError('Ya existe un producto con ese nombre en la categoría seleccionada.')
+        return nombre
+
+    def validate_moneda_origen(self, value):
+        moneda = value.strip().upper()
+        if not moneda:
+            raise serializers.ValidationError('La moneda de origen es obligatoria.')
+        return moneda
+
+    def validate_clasificacion_abc(self, value):
+        if value in (None, ''):
+            return None
+        valor = value.strip().upper()
+        if valor not in ('A', 'B', 'C'):
+            raise serializers.ValidationError('La clasificación ABC debe ser A, B o C.')
+        return valor
+
+    def validate_estado(self, value):
+        valor = value.strip().capitalize()
+        if valor not in ('Activo', 'Inactivo'):
+            raise serializers.ValidationError('El estado debe ser Activo o Inactivo.')
+        return valor
+
+    def validate(self, attrs):
+        stock_minimo = attrs.get('stock_minimo', getattr(self.instance, 'stock_minimo', 0))
+        stock_maximo = attrs.get('stock_maximo', getattr(self.instance, 'stock_maximo', None))
+        if stock_minimo is not None and stock_minimo < 0:
+            raise serializers.ValidationError({'stock_minimo': 'El stock mínimo no puede ser negativo.'})
+        if stock_maximo is not None and stock_maximo < 0:
+            raise serializers.ValidationError({'stock_maximo': 'El stock máximo no puede ser negativo.'})
+        if stock_maximo is not None and stock_maximo < stock_minimo:
+            raise serializers.ValidationError({'stock_maximo': 'El stock máximo no puede ser menor que el stock mínimo.'})
+        return attrs
+
+
+
+class ProveedorSerializer(serializers.ModelSerializer):
+    """CU13: registro y mantenimiento de proveedores."""
+    class Meta:
+        model = Proveedor
+        fields = [
+            'id_proveedor', 'razon_social', 'nit', 'moneda_facturacion',
+            'telefono', 'email', 'direccion',
+        ]
+        read_only_fields = ['id_proveedor']
+
+    def validate_razon_social(self, value):
+        value = value.strip()
+        if not value:
+            raise serializers.ValidationError('La razón social es obligatoria.')
+        return value
+
+    def validate_nit(self, value):
+        value = value.strip()
+        if not value:
+            raise serializers.ValidationError('El NIT es obligatorio.')
+        duplicados = Proveedor.objects.filter(nit__iexact=value)
+        if self.instance:
+            duplicados = duplicados.exclude(pk=self.instance.pk)
+        if duplicados.exists():
+            raise serializers.ValidationError('Ya existe un proveedor registrado con ese NIT.')
+        return value
+
+    def validate_moneda_facturacion(self, value):
+        value = value.strip().upper()
+        if not value:
+            raise serializers.ValidationError('La moneda de facturación es obligatoria.')
+        return value
+
+    def validate_telefono(self, value):
+        return value.strip() if value else value
+
+    def validate_email(self, value):
+        return value.strip().lower() if value else value
+
+    def validate_direccion(self, value):
+        return value.strip() if value else value
+
 
 # ============================================================
 # CU17: REGISTRAR EJERCICIO
@@ -1000,3 +1201,144 @@ class RegistrarSocioSerializer(serializers.Serializer):
             contrato = crear_contrato_pagado(socio=socio, plan=plan, metodo_pago=metodo_pago)
 
         return {'usuario': usuario, 'socio': socio, 'contrato': contrato}
+
+# ============================================================
+# CU14: REGISTRAR COMPRA DE MERCADERIA
+# ============================================================
+class DetalleCompraEntradaSerializer(serializers.Serializer):
+    id_producto = serializers.PrimaryKeyRelatedField(
+        queryset=Producto.objects.filter(estado__iexact='Activo')
+    )
+    cantidad = serializers.IntegerField(min_value=1)
+    costo_unitario_origen = serializers.DecimalField(max_digits=12, decimal_places=2, min_value=Decimal('0.01'))
+
+
+class RegistrarCompraSerializer(serializers.ModelSerializer):
+    """Registra una compra completa y actualiza existencias/costo promedio."""
+    detalles = DetalleCompraEntradaSerializer(many=True, write_only=True)
+
+    class Meta:
+        model = Compra
+        fields = [
+            'id_compra', 'id_proveedor', 'nro_factura_proveedor',
+            'tasa_cambio_aplicada', 'detalles',
+        ]
+        read_only_fields = ['id_compra']
+
+    def validate_tasa_cambio_aplicada(self, value):
+        if value <= 0:
+            raise serializers.ValidationError('La tasa de cambio debe ser mayor que cero.')
+        return value
+
+    def validate(self, attrs):
+        detalles = attrs.get('detalles') or []
+        if not detalles:
+            raise serializers.ValidationError({'detalles': 'La compra debe incluir al menos un producto.'})
+        ids = [d['id_producto'].pk for d in detalles]
+        if len(ids) != len(set(ids)):
+            raise serializers.ValidationError({'detalles': 'No repita productos; agrupe sus cantidades en una sola línea.'})
+        return attrs
+
+    @transaction.atomic
+    def create(self, validated_data):
+        from django.db.models import F
+        from django.utils import timezone
+
+        detalles_data = validated_data.pop('detalles')
+        request = self.context.get('request')
+        usuario = getattr(request, 'user', None)
+        if not usuario or not usuario.is_authenticated or not usuario.es_administrador:
+            raise serializers.ValidationError('Solo un administrador puede registrar compras.')
+
+        administrador, _ = Administrador.objects.get_or_create(id_administrador=usuario)
+        tasa = validated_data['tasa_cambio_aplicada']
+
+        # Bloquea productos para evitar que compras simultaneas calculen stock/costo con datos viejos.
+        producto_ids = sorted(d['id_producto'].pk for d in detalles_data)
+        productos = {p.pk: p for p in Producto.objects.select_for_update().filter(pk__in=producto_ids).order_by('pk')}
+        if len(productos) != len(producto_ids):
+            raise serializers.ValidationError({'detalles': 'Uno o más productos ya no existen.'})
+        for producto in productos.values():
+            if producto.estado.lower() != 'activo':
+                raise serializers.ValidationError({'detalles': f"El producto '{producto.nombre_producto}' está inactivo."})
+
+        lineas = []
+        total_origen = Decimal('0.00')
+        total_local = Decimal('0.00')
+        for item in detalles_data:
+            producto = productos[item['id_producto'].pk]
+            cantidad = item['cantidad']
+            unitario_origen = item['costo_unitario_origen'].quantize(Decimal('0.01'))
+            unitario_local = (unitario_origen * tasa).quantize(Decimal('0.01'))
+            subtotal_origen = (unitario_origen * cantidad).quantize(Decimal('0.01'))
+            subtotal_local = (unitario_local * cantidad).quantize(Decimal('0.01'))
+            total_origen += subtotal_origen
+            total_local += subtotal_local
+            lineas.append((producto, cantidad, unitario_origen, unitario_local, subtotal_origen, subtotal_local))
+
+        compra = Compra.objects.create(
+            id_administrador=administrador,
+            monto_total_origen=total_origen,
+            monto_total_local=total_local,
+            estado_compra='Completada',
+            **validated_data,
+        )
+
+        for producto, cantidad, unitario_origen, unitario_local, subtotal_origen, subtotal_local in lineas:
+            DetalleCompra.objects.create(
+                id_compra=compra, id_producto=producto, cantidad=cantidad,
+                costo_unitario_origen=unitario_origen, costo_unitario_local=unitario_local,
+                subtotal_origen=subtotal_origen, subtotal_local=subtotal_local,
+            )
+            stock_anterior = producto.stock_actual
+            stock_nuevo = stock_anterior + cantidad
+            if stock_anterior > 0:
+                costo_total_anterior = producto.costo_promedio_local * stock_anterior
+                nuevo_promedio = ((costo_total_anterior + subtotal_local) / Decimal(stock_nuevo)).quantize(Decimal('0.01'))
+            else:
+                nuevo_promedio = unitario_local
+            producto.stock_actual = stock_nuevo
+            producto.costo_promedio_local = nuevo_promedio
+            producto.save(update_fields=['stock_actual', 'costo_promedio_local'])
+
+        return compra
+
+
+class CompraDetalleLecturaSerializer(serializers.ModelSerializer):
+    nombre_producto = serializers.CharField(source='id_producto.nombre_producto', read_only=True)
+
+    class Meta:
+        model = DetalleCompra
+        fields = [
+            'id_producto', 'nombre_producto', 'cantidad', 'costo_unitario_origen',
+            'costo_unitario_local', 'subtotal_origen', 'subtotal_local',
+        ]
+
+
+class CompraLecturaSerializer(serializers.ModelSerializer):
+    proveedor_nombre = serializers.CharField(source='id_proveedor.razon_social', read_only=True)
+    detalles = CompraDetalleLecturaSerializer(source='detallecompra_set', many=True, read_only=True)
+    administrador_nombre = serializers.CharField(source='id_administrador.id_administrador.username', read_only=True)
+
+    class Meta:
+        model = Compra
+        fields = [
+            'id_compra', 'id_proveedor', 'proveedor_nombre', 'id_administrador',
+            'administrador_nombre', 'fecha_hora', 'nro_factura_proveedor',
+            'tasa_cambio_aplicada', 'monto_total_origen', 'monto_total_local',
+            'estado_compra', 'detalles',
+        ]
+
+
+# CU16: ALERTAS DE REPOSICION
+class AlertaReposicionSerializer(serializers.ModelSerializer):
+    nombre_producto = serializers.CharField(source='id_producto.nombre_producto', read_only=True)
+    stock_actual = serializers.IntegerField(source='id_producto.stock_actual', read_only=True)
+    stock_minimo = serializers.IntegerField(source='id_producto.stock_minimo', read_only=True)
+
+    class Meta:
+        model = AlertaReposicion
+        fields = ['id_alerta_repo', 'id_producto', 'nombre_producto', 'stock_actual',
+                  'stock_minimo', 'nivel_urgencia', 'cantidad_sugerida',
+                  'estado_alerta', 'fecha_generacion', 'fecha_cierre']
+        read_only_fields = fields

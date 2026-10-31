@@ -2,6 +2,13 @@ import React, { useEffect, useState } from 'react';
 import { Eye, EyeOff } from 'lucide-react';
 import EntrenamientoScreen from './components/EntrenamientoScreen';
 import EntrenadoresScreen from './components/EntrenadoresScreen';
+import CategoriasScreen from './components/CategoriasScreen';
+import ProductosScreen from './components/ProductosScreen';
+import ProveedoresScreen from './components/ProveedoresScreen';
+import ComprasScreen from './components/ComprasScreen';
+import KardexScreen from './components/KardexScreen';
+import AlertasScreen from './components/AlertasScreen';
+import TipoCambioScreen from './components/TipoCambioScreen';
 import {
   iniciarActividad,
   iniciarSesionInactividad,
@@ -143,6 +150,13 @@ interface NavbarProps {
   onRegistrarSocio: () => void;
   onEntrenadores: () => void;
   onPlanes: () => void;
+  onCategorias: () => void;
+  onProductos: () => void;
+  onProveedores: () => void;
+  onCompras: () => void;
+  onKardex: () => void;
+  onAlertas: () => void;
+  onTipoCambio: () => void;
   onRegistrarContrato: () => void;
   onEntrenamiento: () => void;
   onInicio: () => void;
@@ -155,6 +169,13 @@ export const Navbar = ({
   onRegistrarSocio,
   onEntrenadores,
   onPlanes,
+  onCategorias,
+  onProductos,
+  onProveedores,
+  onCompras,
+  onKardex,
+  onAlertas,
+  onTipoCambio,
   onRegistrarContrato,
   onEntrenamiento,
   onInicio,
@@ -322,6 +343,60 @@ export const Navbar = ({
             </div>
           )}
         </div>
+      )}
+
+      {/* CU11: Administración de categorías — solo Administrador */}
+      {usuario.es_administrador && (
+        <button onClick={onCategorias} className={pantallaActual === 'categorias' ? btnActivo : btnInactivo}>
+          CATEGORÍAS
+        </button>
+      )}
+
+      {/* CU12: Catálogo comercial — administrador gestiona, recepción consulta */}
+      {(usuario.es_administrador || usuario.es_recepcionista) && (
+        <button onClick={onProductos} className={pantallaActual === 'productos' ? btnActivo : btnInactivo}>
+          PRODUCTOS
+        </button>
+      )}
+
+      {/* CU13: Proveedores — administrador gestiona, recepción consulta */}
+      {(usuario.es_administrador || usuario.es_recepcionista) && (
+        <button onClick={onProveedores} className={pantallaActual === 'proveedores' ? btnActivo : btnInactivo}>
+          PROVEEDORES
+        </button>
+      )}
+
+            {/* CU14, CU15 y CU16: Inventario — solo administrador */}
+      {usuario.es_administrador && (
+        <>
+          <button
+            onClick={onCompras}
+            className={pantallaActual === 'compras' ? btnActivo : btnInactivo}
+          >
+            COMPRAS
+          </button>
+
+          <button
+            onClick={onKardex}
+            className={pantallaActual === 'kardex' ? btnActivo : btnInactivo}
+          >
+            KARDEX
+          </button>
+
+          <button
+            onClick={onAlertas}
+            className={pantallaActual === 'alertas' ? btnActivo : btnInactivo}
+          >
+            ALERTAS
+          </button>
+        </>
+      )}
+
+      {/* Configuración general: solo Administrador */}
+      {usuario.es_administrador && (
+        <button onClick={onTipoCambio} className={pantallaActual === 'configuracion' ? btnActivo : btnInactivo}>
+          CONFIGURACIÓN
+        </button>
       )}
 
       {/* PAQUETE 4: ENTRENAMIENTO (CU17–CU20)
@@ -2746,6 +2821,7 @@ const PantallaRegistrarContratoMembresia = ({ onVolver }: { onVolver: () => void
   const [mensaje, setMensaje] = useState('');
   const [errorFormulario, setErrorFormulario] = useState('');
   const [guardando, setGuardando] = useState(false);
+  const [paypalProcesando, setPaypalProcesando] = useState(false);
 
   const hoyISO = new Date().toISOString().slice(0, 10);
 
@@ -2796,6 +2872,42 @@ const PantallaRegistrarContratoMembresia = ({ onVolver }: { onVolver: () => void
       setCargando(false);
     }
   };
+
+  // PAYPAL_MEMBERSHIP_FLOW_V1: verifica el pago al regresar desde PayPal.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const orderId = params.get('token');
+    if (params.get('paypal') === 'cancelado') {
+      setErrorFormulario('El pago fue cancelado. No se registró ningún contrato.');
+      window.history.replaceState({}, document.title, window.location.pathname);
+      return;
+    }
+    if (!orderId) return;
+    const capturar = async () => {
+      setPaypalProcesando(true);
+      setMensaje('Verificando el pago con PayPal...');
+      setErrorFormulario('');
+      try {
+        const response = await fetch(`${API_URL}/paypal/membresias/capturar/`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+          body: JSON.stringify({ order_id: orderId }),
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(mensajeDeError(data));
+        setMensaje(data.mensaje || 'Pago confirmado y contrato registrado.');
+        setForm(formVacio);
+        await cargarDatos();
+      } catch (err) {
+        setMensaje('');
+        setErrorFormulario(err instanceof Error ? err.message : 'No se pudo confirmar el pago.');
+      } finally {
+        setPaypalProcesando(false);
+        window.history.replaceState({}, document.title, window.location.pathname);
+      }
+    };
+    capturar();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     cargarDatos();
@@ -2853,6 +2965,26 @@ const PantallaRegistrarContratoMembresia = ({ onVolver }: { onVolver: () => void
       setErrorFormulario('Debe seleccionar un método de pago.');
       return;
     }
+    // PayPal: crear orden y redirigir; el contrato se crea solo tras captura verificada.
+    if (form.id_metodo_pago === 'paypal') {
+      if (!planSeleccionado || !socioSeleccionado) { setErrorFormulario('Selecciona socio y plan.'); return; }
+      setGuardando(true);
+      try {
+        const base = `${window.location.origin}${window.location.pathname}`;
+        const response = await fetch(`${API_URL}/paypal/membresias/crear-orden/`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+          body: JSON.stringify({ id_socio: Number(form.id_socio), id_plan_membresia: Number(form.id_plan_membresia), return_url: `${base}?paypal=retorno`, cancel_url: `${base}?paypal=cancelado` }),
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(mensajeDeError(data));
+        if (!data.url_aprobacion) throw new Error('PayPal no devolvió el enlace de aprobación.');
+        window.location.assign(data.url_aprobacion);
+        return;
+      } catch (err) { setErrorFormulario(err instanceof Error ? err.message : 'No se pudo crear la orden PayPal.'); }
+      finally { setGuardando(false); }
+      return;
+    }
+
     if (form.monto_pagado_local === '' || isNaN(montoNum)) {
       setErrorFormulario('Debe indicar el monto pagado.');
       return;
@@ -3036,6 +3168,7 @@ const PantallaRegistrarContratoMembresia = ({ onVolver }: { onVolver: () => void
                     required
                   >
                     <option value="">— Seleccione —</option>
+                    <option value="paypal">PayPal (Sandbox)</option>
                     {metodosPago.map((m) => (
                       <option key={m.id_metodo_pago} value={m.id_metodo_pago}>
                         {m.descripcion}
@@ -3044,6 +3177,7 @@ const PantallaRegistrarContratoMembresia = ({ onVolver }: { onVolver: () => void
                   </select>
                 </div>
 
+                {form.id_metodo_pago !== 'paypal' && (
                 <div>
                   <label className="block mb-1">
                     Monto pagado{precioPlan !== null ? ` (exacto: ${precioPlan})` : ''}:
@@ -3058,8 +3192,17 @@ const PantallaRegistrarContratoMembresia = ({ onVolver }: { onVolver: () => void
                     required
                   />
                 </div>
+                )}
               </div>
 
+              {form.id_metodo_pago === 'paypal' && planSeleccionado && (
+                <div className="bg-blue-900/30 border border-blue-700 p-4 rounded text-sm">
+                  <p className="font-bold">Pago mediante PayPal Sandbox</p>
+                  <p>Precio: {planSeleccionado.costo_base_origen} Bs.</p>
+                  <p>Se aplicará automáticamente el tipo de cambio vigente configurado por el administrador.</p>
+                  <p className="text-yellow-300 mt-1">El contrato se registra únicamente después de confirmar el pago.</p>
+                </div>
+              )}
               {planSeleccionado && (
                 <div className="bg-gray-800 p-4 rounded text-sm flex flex-col gap-1">
                   <p>
@@ -3096,10 +3239,10 @@ const PantallaRegistrarContratoMembresia = ({ onVolver }: { onVolver: () => void
               <div className="flex gap-3 mt-3">
                 <button
                   type="submit"
-                  disabled={guardando}
+                  disabled={guardando || paypalProcesando}
                   className="bg-yellow-500 text-black px-5 py-2 rounded font-bold"
                 >
-                  {guardando ? 'REGISTRANDO...' : 'REGISTRAR CONTRATO'}
+                  {guardando ? 'PROCESANDO...' : form.id_metodo_pago === 'paypal' ? 'PAGAR CON PAYPAL' : 'REGISTRAR CONTRATO'}
                 </button>
                 <button
                   type="button"
@@ -3230,9 +3373,16 @@ export default function App() {
     | 'registrar-socio'
     | 'entrenadores'
     | 'planes'
+    | 'categorias'
+    | 'productos'
+    | 'proveedores'
+    | 'compras'
+    | 'kardex'
+    | 'alertas'
+    | 'configuracion'
     | 'contrato'
     | 'entrenamiento'
-  >('inicio');
+  >((new URLSearchParams(window.location.search).has('token') || new URLSearchParams(window.location.search).get('paypal') === 'cancelado') ? 'contrato' : 'inicio');
   // Cierre automático de sesión tras 15 min de inactividad real. El módulo
   // decide internamente si hay sesión autenticada y limpia sus propios
   // listeners/intervalos al desmontar.
@@ -3259,6 +3409,13 @@ export default function App() {
         onRegistrarSocio={() => setPantalla('registrar-socio')}
         onEntrenadores={() => setPantalla('entrenadores')}
         onPlanes={() => setPantalla('planes')}
+        onCategorias={() => setPantalla('categorias')}
+        onProductos={() => setPantalla('productos')}
+        onProveedores={() => setPantalla('proveedores')}
+        onCompras={() => setPantalla('compras')}
+        onKardex={() => setPantalla('kardex')}
+        onAlertas={() => setPantalla('alertas')}
+        onTipoCambio={() => setPantalla('configuracion')}
         onRegistrarContrato={() => setPantalla('contrato')}
         onEntrenamiento={() => setPantalla('entrenamiento')}
       />
@@ -3285,6 +3442,20 @@ export default function App() {
           <PantallaPlanesMembresia
             onVolver={() => setPantalla('inicio')}
           />
+        ) : pantalla === 'categorias' ? (
+          <CategoriasScreen onVolver={() => setPantalla('inicio')} />
+        ) : pantalla === 'productos' ? (
+          <ProductosScreen onVolver={() => setPantalla('inicio')} />
+        ) : pantalla === 'proveedores' ? (
+          <ProveedoresScreen onVolver={() => setPantalla('inicio')} />
+        ) : pantalla === 'compras' ? (
+          <ComprasScreen onVolver={() => setPantalla('inicio')} />
+        ) : pantalla === 'kardex' ? (
+          <KardexScreen onVolver={() => setPantalla('inicio')} />
+        ) : pantalla === 'alertas' ? (
+          <AlertasScreen onVolver={() => setPantalla('inicio')} />
+        ) : pantalla === 'configuracion' ? (
+          <TipoCambioScreen onVolver={() => setPantalla('inicio')} />
         ) : pantalla === 'contrato' ? (
           <PantallaRegistrarContratoMembresia
             onVolver={() => setPantalla('inicio')}

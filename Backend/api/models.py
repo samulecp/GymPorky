@@ -478,3 +478,46 @@ class DetalleVentaServicio(models.Model):
     class Meta:
         db_table = 'detalle_venta_servicio'
         unique_together = (('id_venta', 'id_plan_membresia'),)
+
+class PagoPasarela(models.Model):
+    """Registro idempotente de pagos externos (PayPal)."""
+    ESTADOS = [
+        ('PENDIENTE', 'Pendiente'),
+        ('COMPLETADO', 'Completado'),
+        ('CANCELADO', 'Cancelado'),
+        ('FALLIDO', 'Fallido'),
+    ]
+    id_pago = models.AutoField(primary_key=True)
+    proveedor = models.CharField(max_length=20, default='PAYPAL')
+    id_orden_externa = models.CharField(max_length=100, unique=True)
+    id_captura_externa = models.CharField(max_length=100, unique=True, null=True, blank=True)
+    tipo_operacion = models.CharField(max_length=20, default='MEMBRESIA')
+    id_usuario = models.ForeignKey(Usuario, on_delete=models.RESTRICT, db_column='id_usuario')
+    id_socio = models.ForeignKey(Socio, on_delete=models.RESTRICT, db_column='id_socio')
+    id_plan_mem = models.ForeignKey(PlanMembresia, on_delete=models.RESTRICT, db_column='id_plan_mem')
+    id_contrato_mem = models.ForeignKey(ContratoMembresia, on_delete=models.RESTRICT, null=True, blank=True, db_column='id_contrato_mem')
+    monto_local = models.DecimalField(max_digits=12, decimal_places=2)
+    monto_usd = models.DecimalField(max_digits=12, decimal_places=2)
+    tasa_cambio = models.DecimalField(max_digits=10, decimal_places=4)
+    estado = models.CharField(max_length=20, choices=ESTADOS, default='PENDIENTE')
+    fecha_creacion = models.DateTimeField(auto_now_add=True)
+    fecha_actualizacion = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'pago_pasarela'
+        ordering = ['-fecha_creacion']
+
+
+class ConfiguracionSistema(models.Model):
+    """Configuración vigente del sistema; cada clave tiene una sola fila."""
+    id_configuracion = models.AutoField(primary_key=True)
+    clave = models.CharField(max_length=60, unique=True)
+    valor = models.DecimalField(max_digits=10, decimal_places=4)
+    fecha_actualizacion = models.DateTimeField(auto_now=True)
+    actualizado_por = models.ForeignKey(
+        Usuario, on_delete=models.SET_NULL, null=True, blank=True,
+        db_column='actualizado_por'
+    )
+
+    class Meta:
+        db_table = 'configuracion_sistema'

@@ -20,10 +20,13 @@ from rest_framework_simplejwt.views import (
     TokenObtainPairView,
     TokenRefreshView,
 )
+from api.paypal_views import PayPalConexionView
+
 
 urlpatterns = [
     path('admin/', admin.site.urls),  # <--- AGREGADO AQUÍ
     path('api/token/', TokenObtainPairView.as_view(), name='token_obtain_pair'),
     path('api/token/refresh/', TokenRefreshView.as_view(), name='token_refresh'),
+    path('api/paypal/conexion/', PayPalConexionView.as_view(), name='paypal_conexion'),
     path('api/', include('api.urls')),  # <--- Monta todas las rutas CRUD de la API
 ]
