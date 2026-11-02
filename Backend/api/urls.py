@@ -8,7 +8,7 @@ from .views import (
     RegistroView, UsuarioViewSet, SocioViewSet, CategoriaProductoViewSet, ProveedorViewSet, CompraViewSet,
     PlanMembresiaViewSet, MetodoPagoViewSet, VentaViewSet, ProductoViewSet, KardexViewSet, AlertaReposicionViewSet,
     EjercicioViewSet, RutinaViewSet, LoginView,
-    BitacoraViewSet, RegistrarSocioView, RegistrarContratoMembresiaView,
+    BitacoraViewSet, RegistrarSocioView, RegistrarContratoMembresiaView, CajaViewSet,
     # CU17–CU20: módulo de entrenamiento
     AsignacionRutinaViewSet, EntrenadorViewSet, RegistrarEntrenadorView,
     HorarioEntrenadorViewSet, TurnoViewSet,
@@ -21,6 +21,7 @@ router.register(r'socios', SocioViewSet)
 router.register(r'planes', PlanMembresiaViewSet)
 router.register(r'metodos-pago', MetodoPagoViewSet)  # CU06: catálogo de pago
 router.register(r'ventas', VentaViewSet)
+router.register(r'caja', CajaViewSet, basename='caja')
 router.register(r'productos', ProductoViewSet)
 router.register(r'compras', CompraViewSet, basename='compras')
 router.register(r'kardex', KardexViewSet, basename='kardex')  # CU15

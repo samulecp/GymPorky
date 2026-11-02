@@ -1,6 +1,8 @@
 from django.core.validators import MinValueValidator, MaxValueValidator
 from django.contrib.auth.models import AbstractUser
 from django.db import models
+from django.db.models import Q
+from decimal import Decimal
 
 # ==============================================================================
 # CONSTANTES COMPARTIDAS (catálogos de UI y validaciones)
@@ -59,6 +61,7 @@ class Usuario(AbstractUser):
 class MetodoPago(models.Model):
     id_metodo_pago = models.AutoField(primary_key=True)
     descripcion = models.CharField(max_length=100, unique=True)
+    activo = models.BooleanField(default=True)
 
     class Meta:
         db_table = 'metodo_pago'
@@ -257,15 +260,41 @@ class Producto(models.Model):
 # ==============================================================================
 
 class ArqueoCaja(models.Model):
+    ESTADOS = [('ABIERTA', 'Abierta'), ('CERRADA', 'Cerrada')]
     id_caja = models.AutoField(primary_key=True)
-    id_administrador = models.ForeignKey(Administrador, on_delete=models.RESTRICT, db_column='id_administrador')
+    # Se conserva la relación histórica; la responsabilidad operativa nueva
+    # se registra directamente contra Usuario para admitir recepcionistas.
+    id_administrador = models.ForeignKey(Administrador, on_delete=models.RESTRICT, db_column='id_administrador', null=True, blank=True)
+    responsable = models.ForeignKey(Usuario, on_delete=models.RESTRICT, related_name='cajas_asignadas', null=True, blank=True)
+    turno = models.ForeignKey(Turno, on_delete=models.RESTRICT, null=True, blank=True)
     fecha_apertura = models.DateTimeField()
     fecha_cierre = models.DateTimeField(null=True, blank=True)
     monto_inicial = models.DecimalField(max_digits=12, decimal_places=2, validators=[MinValueValidator(0)])
     monto_final = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True, validators=[MinValueValidator(0)])
+    efectivo_contado = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True, validators=[MinValueValidator(0)])
+    diferencia = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
+    estado = models.CharField(max_length=10, choices=ESTADOS, default='CERRADA')
 
     class Meta:
         db_table = 'arqueo_caja'
+        constraints = [models.UniqueConstraint(fields=['estado'], condition=Q(estado='ABIERTA'), name='una_sola_caja_abierta_global')]
+
+
+class EgresoCaja(models.Model):
+    id_egreso = models.AutoField(primary_key=True)
+    caja = models.ForeignKey(ArqueoCaja, on_delete=models.RESTRICT, related_name='egresos')
+    usuario = models.ForeignKey(Usuario, on_delete=models.RESTRICT)
+    fecha_hora = models.DateTimeField(auto_now_add=True)
+    concepto = models.CharField(max_length=180)
+    monto = models.DecimalField(
+    max_digits=12,
+    decimal_places=2,
+    validators=[MinValueValidator(Decimal('0.01'))])
+    observacion = models.TextField(null=True, blank=True)
+
+    class Meta:
+        db_table = 'egreso_caja'
+        ordering = ['-fecha_hora']
 
 
 class Compra(models.Model):
@@ -396,6 +425,7 @@ class Venta(models.Model):
     id_usuario = models.ForeignKey(Usuario, on_delete=models.RESTRICT, db_column='id_usuario')
     id_metodo_pago = models.ForeignKey(MetodoPago, on_delete=models.RESTRICT, db_column='id_metodo_pago')
     id_socio = models.ForeignKey(Socio, on_delete=models.RESTRICT, db_column='id_socio')
+    caja = models.ForeignKey(ArqueoCaja, on_delete=models.RESTRICT, null=True, blank=True, related_name='ventas')
     fecha_hora = models.DateTimeField(auto_now_add=True)
     nro_factura = models.CharField(max_length=50, null=True, blank=True)
     tasa_cambio_aplicada = models.DecimalField(max_digits=10, decimal_places=4, default=1.0000)

@@ -1,4 +1,4 @@
-# api/serializers.py
+﻿# api/serializers.py
 from datetime import date
 from decimal import Decimal
 
@@ -9,9 +9,9 @@ from django.core.exceptions import ValidationError
 from django.db import transaction
 from .models import (
     Usuario, Socio, PlanMembresia, Venta, Producto, CategoriaProducto, Proveedor, Compra, DetalleCompra, Administrador, Ejercicio, Rutina,
-    Bitacora, MetodoPago, ContratoMembresia, KardexInventario,
+    Bitacora, MetodoPago, ContratoMembresia, KardexInventario, DetalleVentaProducto,
     DetalleRutina, AsignacionRutina, Entrenador, HorarioEntrenador, Turno,
-    GRUPOS_MUSCULARES, NIVELES_RUTINA, DIAS_SEMANA, AlertaReposicion,
+    GRUPOS_MUSCULARES, NIVELES_RUTINA, DIAS_SEMANA, AlertaReposicion, ArqueoCaja, EgresoCaja,
 )
 from .membresias import (
     crear_contrato_pagado,
@@ -25,7 +25,7 @@ from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 Usuario = get_user_model()
 
 class CategoriaProductoSerializer(serializers.ModelSerializer):
-    """CU11: administración del catálogo de categorías y subcategorías."""
+    """CU11: administraciÃ³n del catÃ¡logo de categorÃ­as y subcategorÃ­as."""
     id_subcategoria = serializers.PrimaryKeyRelatedField(
         queryset=CategoriaProducto.objects.all(),
         required=False,
@@ -40,19 +40,19 @@ class CategoriaProductoSerializer(serializers.ModelSerializer):
     def validate_nombre_categoria(self, value):
         nombre = value.strip()
         if not nombre:
-            raise serializers.ValidationError('El nombre de la categoría es obligatorio.')
+            raise serializers.ValidationError('El nombre de la categorÃ­a es obligatorio.')
         duplicados = CategoriaProducto.objects.filter(nombre_categoria__iexact=nombre)
         if self.instance:
             duplicados = duplicados.exclude(pk=self.instance.pk)
         if duplicados.exists():
-            raise serializers.ValidationError('Ya existe una categoría con ese nombre.')
+            raise serializers.ValidationError('Ya existe una categorÃ­a con ese nombre.')
         return nombre
 
     def validate(self, attrs):
         padre = attrs.get('id_subcategoria', getattr(self.instance, 'id_subcategoria', None))
         if self.instance and padre:
             if padre.pk == self.instance.pk:
-                raise serializers.ValidationError({'id_subcategoria': 'Una categoría no puede ser su propia subcategoría.'})
+                raise serializers.ValidationError({'id_subcategoria': 'Una categorÃ­a no puede ser su propia subcategorÃ­a.'})
             # Evita ciclos: no se puede asignar como padre a uno de sus descendientes.
             pendientes = [self.instance]
             visitados = set()
@@ -62,7 +62,7 @@ class CategoriaProductoSerializer(serializers.ModelSerializer):
                     continue
                 visitados.add(actual.pk)
                 if actual.pk == padre.pk:
-                    raise serializers.ValidationError({'id_subcategoria': 'La relación generaría un ciclo de categorías.'})
+                    raise serializers.ValidationError({'id_subcategoria': 'La relaciÃ³n generarÃ­a un ciclo de categorÃ­as.'})
                 pendientes.extend(list(CategoriaProducto.objects.filter(id_subcategoria=actual)))
         return attrs
 
@@ -76,9 +76,9 @@ class RegistroUsuarioSerializer(serializers.ModelSerializer):
         fields = ['username', 'email', 'password', 'password2', 'ci', 'telefono', 'es_socio', 'es_entrenador', 'es_recepcionista', 'es_administrador']
 
     def validate(self, attrs):
-        # Las contraseñas deben coincidir
+        # Las contraseÃ±as deben coincidir
         if attrs.get('password') != attrs.get('password2'):
-            raise serializers.ValidationError({'password2': 'Las contraseñas no coinciden.'})
+            raise serializers.ValidationError({'password2': 'Las contraseÃ±as no coinciden.'})
         return attrs
 
     def validate_password(self, value):
@@ -90,16 +90,16 @@ class RegistroUsuarioSerializer(serializers.ModelSerializer):
         return value
 
     def create(self, validated_data):
-        # create_user hashea la contraseña automáticamente (PBKDF2 + salt)
+        # create_user hashea la contraseÃ±a automÃ¡ticamente (PBKDF2 + salt)
         validated_data.pop('password2', None)
         user = Usuario.objects.create_user(**validated_data)
         return user
 
 
 class UsuarioSerializer(serializers.ModelSerializer):
-    # CU01 (edición): la contraseña es opcional al actualizar. Se acepta el
-    # campo vacío y se interpreta como "no cambiar la contraseña"; al crear,
-    # la validación sigue exigiéndola (no se debilitan las cuentas nuevas).
+    # CU01 (ediciÃ³n): la contraseÃ±a es opcional al actualizar. Se acepta el
+    # campo vacÃ­o y se interpreta como "no cambiar la contraseÃ±a"; al crear,
+    # la validaciÃ³n sigue exigiÃ©ndola (no se debilitan las cuentas nuevas).
     password = serializers.CharField(
         write_only=True,
         required=False,
@@ -112,8 +112,8 @@ class UsuarioSerializer(serializers.ModelSerializer):
         allow_blank=True,
     )
 
-    # Resumen de membresía del socio (solo lectura). Es ``null`` para las
-    # cuentas que no son socios o que aún no tienen expediente de socio, de
+    # Resumen de membresÃ­a del socio (solo lectura). Es ``null`` para las
+    # cuentas que no son socios o que aÃºn no tienen expediente de socio, de
     # modo que no se presenta como si fuera una propiedad de todo usuario.
     membresia = serializers.SerializerMethodField()
 
@@ -147,9 +147,9 @@ class UsuarioSerializer(serializers.ModelSerializer):
         return resumen_membresia(socio)
 
     def validate(self, attrs):
-        # Edición (CU01): un campo de contraseña vacío u omitido significa
-        # "no modificar la contraseña actual". Se normaliza a ausente para no
-        # guardar nunca una contraseña en blanco ni reescribir la existente.
+        # EdiciÃ³n (CU01): un campo de contraseÃ±a vacÃ­o u omitido significa
+        # "no modificar la contraseÃ±a actual". Se normaliza a ausente para no
+        # guardar nunca una contraseÃ±a en blanco ni reescribir la existente.
         if attrs.get('password') in ('', None):
             attrs.pop('password', None)
         if attrs.get('password2') in ('', None):
@@ -158,25 +158,25 @@ class UsuarioSerializer(serializers.ModelSerializer):
         password = attrs.get('password')
         password2 = attrs.get('password2')
 
-        # Al CREAR la contraseña sigue siendo obligatoria (se mantienen los
+        # Al CREAR la contraseÃ±a sigue siendo obligatoria (se mantienen los
         # requisitos de seguridad para las cuentas nuevas).
         if self.instance is None:
             if not password:
                 raise serializers.ValidationError({
-                    'password': 'La contraseña es obligatoria.'
+                    'password': 'La contraseÃ±a es obligatoria.'
                 })
 
             if not password2:
                 raise serializers.ValidationError({
-                    'password2': 'Debe confirmar la contraseña.'
+                    'password2': 'Debe confirmar la contraseÃ±a.'
                 })
 
-        # Si se ingresó contraseña, ambas deben coincidir y cumplir la
-        # política de complejidad existente.
+        # Si se ingresÃ³ contraseÃ±a, ambas deben coincidir y cumplir la
+        # polÃ­tica de complejidad existente.
         if password or password2:
             if password != password2:
                 raise serializers.ValidationError({
-                    'password2': 'Las contraseñas no coinciden.'
+                    'password2': 'Las contraseÃ±as no coinciden.'
                 })
 
             try:
@@ -189,7 +189,7 @@ class UsuarioSerializer(serializers.ModelSerializer):
         # CU04: el rol de socio no se administra desde "Gestionar usuarios",
         # porque ese flujo no crea el expediente Socio (fecha de nacimiento,
         # etc.). El alta correcta es "Registrar nuevo socio", que usa otro
-        # serializador y sí crea/víncula la cuenta con su expediente.
+        # serializador y sÃ­ crea/vÃ­ncula la cuenta con su expediente.
         es_socio = attrs.get('es_socio')
         if es_socio:
             if self.instance is None:
@@ -198,10 +198,10 @@ class UsuarioSerializer(serializers.ModelSerializer):
                                 '"Gestionar usuarios". Use "Registrar nuevo '
                                 'socio" para crear la cuenta y su expediente.'
                 })
-            # En edición solo se permite conservar el rol de socio si la
-            # cuenta ya es socio o ya tiene expediente Socio. Así no se
-            # bloquea la edición legítima de cuentas existentes ni se alteran
-            # datos históricos, pero se evitan nuevas inconsistencias.
+            # En ediciÃ³n solo se permite conservar el rol de socio si la
+            # cuenta ya es socio o ya tiene expediente Socio. AsÃ­ no se
+            # bloquea la ediciÃ³n legÃ­tima de cuentas existentes ni se alteran
+            # datos histÃ³ricos, pero se evitan nuevas inconsistencias.
             if not (self.instance.es_socio or hasattr(self.instance, 'socio')):
                 raise serializers.ValidationError({
                     'es_socio': 'No se puede asignar el rol de socio a una '
@@ -243,7 +243,7 @@ class LoginSerializer(TokenObtainPairSerializer):
         usuario = self.user
         if usuario.estado_cuenta != 'Activo':
            raise serializers.ValidationError({
-           'detail': 'La cuenta está desactivada. Contacte con el administrador.'
+           'detail': 'La cuenta estÃ¡ desactivada. Contacte con el administrador.'
          })
         data['usuario'] = {
             'id': usuario.id,
@@ -267,7 +267,7 @@ class SocioSerializer(serializers.ModelSerializer):
     ci = serializers.CharField(source='id_socio.ci', read_only=True)
     estado_cuenta = serializers.CharField(source='id_socio.estado_cuenta', read_only=True)
 
-    # Consulta de vigencia e historial de membresía (solo lectura, CU06).
+    # Consulta de vigencia e historial de membresÃ­a (solo lectura, CU06).
     membresia = serializers.SerializerMethodField()
     historial_contratos = serializers.SerializerMethodField()
 
@@ -311,19 +311,19 @@ class PlanMembresiaSerializer(serializers.ModelSerializer):
 
     def validate_duracion_dias(self, value):
         if value is None:
-            raise serializers.ValidationError('La duración en días es obligatoria.')
+            raise serializers.ValidationError('La duraciÃ³n en dÃ­as es obligatoria.')
         if value < 1:
-            raise serializers.ValidationError('La duración debe ser al menos 1 día.')
+            raise serializers.ValidationError('La duraciÃ³n debe ser al menos 1 dÃ­a.')
         return value
 
 class MetodoPagoSerializer(serializers.ModelSerializer):
     class Meta:
         model = MetodoPago
-        fields = ['id_metodo_pago', 'descripcion']
+        fields = ['id_metodo_pago', 'descripcion', 'activo']
 
 
 class TurnoSerializer(serializers.ModelSerializer):
-    """Catálogo de franjas horarias (CU20: horarios del entrenador)."""
+    """CatÃ¡logo de franjas horarias (CU20: horarios del entrenador)."""
 
     class Meta:
         model = Turno
@@ -331,7 +331,7 @@ class TurnoSerializer(serializers.ModelSerializer):
 
 
 class ContratoMembresiaSerializer(serializers.ModelSerializer):
-    """Lectura de un contrato de membresía (respuesta del registro, CU06)."""
+    """Lectura de un contrato de membresÃ­a (respuesta del registro, CU06)."""
     socio_username = serializers.SerializerMethodField()
     socio_ci = serializers.SerializerMethodField()
     plan_nombre = serializers.CharField(source='id_plan_mem.nombre_plan', read_only=True)
@@ -387,7 +387,7 @@ class ContratoMembresiaSerializer(serializers.ModelSerializer):
 
 
 class RegistrarContratoMembresiaSerializer(serializers.Serializer):
-    """CU06: Registra un contrato de membresía para un socio existente.
+    """CU06: Registra un contrato de membresÃ­a para un socio existente.
 
     Reglas de negocio:
     - Solo se aceptan planes activos.
@@ -397,7 +397,7 @@ class RegistrarContratoMembresiaSerializer(serializers.Serializer):
       el socio tiene vigencia pagada, el nuevo contrato empieza al vencer la
       anterior; si no, empieza hoy.
     - El servidor determina la fecha de inicio, el vencimiento, el tipo de
-      operación y el ``id_renovacion``; no se aceptan desde el cliente.
+      operaciÃ³n y el ``id_renovacion``; no se aceptan desde el cliente.
     """
     id_socio = serializers.PrimaryKeyRelatedField(queryset=Socio.objects.all())
     id_plan_membresia = serializers.PrimaryKeyRelatedField(
@@ -426,7 +426,7 @@ class RegistrarContratoMembresiaSerializer(serializers.Serializer):
         plan = attrs.get('id_plan_membresia')
         monto = attrs.get('monto_pagado_local')
         if plan is not None and monto is not None:
-            # Pago exacto (ni menor, ni mayor, ni negativo, ni inválido).
+            # Pago exacto (ni menor, ni mayor, ni negativo, ni invÃ¡lido).
             try:
                 validar_pago_exacto(monto, plan)
             except ValidationError as error:
@@ -442,19 +442,95 @@ class RegistrarContratoMembresiaSerializer(serializers.Serializer):
             metodo_pago=validated_data['id_metodo_pago'],
         )
 
+class DetalleVentaProductoLecturaSerializer(serializers.ModelSerializer):
+    nombre_producto = serializers.CharField(source='id_producto.nombre_producto', read_only=True)
+
+    class Meta:
+        model = DetalleVentaProducto
+        fields = ['id_producto', 'nombre_producto', 'cantidad', 'precio_unitario_origen',
+                  'precio_unitario_local', 'subtotal_origen', 'subtotal_local']
+
+
+class DetalleVentaProductoEntradaSerializer(serializers.Serializer):
+    id_producto = serializers.PrimaryKeyRelatedField(queryset=Producto.objects.all())
+    cantidad = serializers.IntegerField(min_value=1)
+
+
 class VentaSerializer(serializers.ModelSerializer):
+    # El cliente solo envÃ­a socio, mÃ©todo y productos. Usuario, caja y total
+    # son determinados/calculados por el servidor.
+    detalles = DetalleVentaProductoEntradaSerializer(many=True, write_only=True)
+    detalle_productos = DetalleVentaProductoLecturaSerializer(
+        source='detalleventaproducto_set', many=True, read_only=True
+    )
+    id_usuario = serializers.PrimaryKeyRelatedField(read_only=True)
+    caja = serializers.PrimaryKeyRelatedField(read_only=True)
+    monto_total_local = serializers.DecimalField(max_digits=12, decimal_places=2, read_only=True)
+    tasa_cambio_aplicada = serializers.DecimalField(max_digits=10, decimal_places=4, read_only=True)
+    fecha_hora = serializers.DateTimeField(read_only=True)
+
     class Meta:
         model = Venta
-        fields = '__all__'
+        fields = ['id_venta', 'caja', 'id_usuario', 'id_metodo_pago', 'id_socio',
+                  'fecha_hora', 'nro_factura', 'tasa_cambio_aplicada',
+                  'monto_total_local', 'estado_venta', 'detalles', 'detalle_productos']
+        read_only_fields = ['id_venta', 'caja', 'id_usuario', 'fecha_hora',
+                            'tasa_cambio_aplicada', 'monto_total_local', 'estado_venta']
+
+    def validate_id_metodo_pago(self, metodo):
+        if not metodo.activo:
+            raise serializers.ValidationError('El mÃ©todo de pago seleccionado estÃ¡ inactivo.')
+        return metodo
+
+    def validate_detalles(self, detalles):
+        if not detalles:
+            raise serializers.ValidationError('Agrega al menos un producto a la venta.')
+        ids = [item['id_producto'].pk for item in detalles]
+        if len(ids) != len(set(ids)):
+            raise serializers.ValidationError('No repitas productos; modifica la cantidad de la lÃ­nea existente.')
+        return detalles
+
+    @transaction.atomic
+    def create(self, validated_data):
+        detalles = validated_data.pop('detalles')
+        # Bloquea filas para evitar vender simultÃ¡neamente el mismo stock.
+        productos_ids = [item['id_producto'].pk for item in detalles]
+        productos = {
+            p.pk: p for p in Producto.objects.select_for_update().filter(pk__in=productos_ids)
+        }
+        total = Decimal('0.00')
+        lineas = []
+        for item in detalles:
+            producto = productos.get(item['id_producto'].pk)
+            cantidad = item['cantidad']
+            if producto is None or producto.estado.lower() != 'activo':
+                raise serializers.ValidationError({'detalles': 'Uno de los productos ya no estÃ¡ disponible.'})
+            if producto.stock_actual < cantidad:
+                raise serializers.ValidationError({'detalles': f"Stock insuficiente para {producto.nombre_producto}. Disponible: {producto.stock_actual}."})
+            precio = producto.precio_venta_local  # Todos los importes del sistema estÃ¡n en Bs.
+            subtotal = precio * cantidad
+            total += subtotal
+            lineas.append((producto, cantidad, precio, subtotal))
+
+        venta = Venta.objects.create(monto_total_local=total, **validated_data)
+        for producto, cantidad, precio, subtotal in lineas:
+            DetalleVentaProducto.objects.create(
+                id_venta=venta, id_producto=producto, cantidad=cantidad,
+                precio_unitario_origen=precio, precio_unitario_local=precio,
+                subtotal_origen=subtotal, subtotal_local=subtotal,
+            )
+            producto.stock_actual -= cantidad
+            producto.save(update_fields=['stock_actual'])
+        return venta
 
 
 
 class RegistrarKardexSerializer(serializers.ModelSerializer):
-    """CU15: movimiento extraordinario de inventario con actualización atómica."""
+    """CU15: movimiento extraordinario de inventario con actualizaciÃ³n atÃ³mica."""
     id_producto = serializers.PrimaryKeyRelatedField(queryset=Producto.objects.all())
     tipo_movimiento = serializers.ChoiceField(choices=[
         ('INGRESO', 'Ingreso extraordinario'),
-        ('RETIRO', 'Retiro por vencimiento, daño o pérdida'),
+        ('RETIRO', 'Retiro por vencimiento, daÃ±o o pÃ©rdida'),
         ('AJUSTE_POSITIVO', 'Ajuste positivo'),
         ('AJUSTE_NEGATIVO', 'Ajuste negativo'),
     ])
@@ -504,7 +580,7 @@ class KardexLecturaSerializer(serializers.ModelSerializer):
 
 
 class ProductoSerializer(serializers.ModelSerializer):
-    """CU12: catálogo comercial. El stock y el costo promedio se calculan
+    """CU12: catÃ¡logo comercial. El stock y el costo promedio se calculan
     mediante compras, ventas y movimientos extraordinarios de Kardex; nunca
     se editan directamente desde esta pantalla.
     """
@@ -531,7 +607,7 @@ class ProductoSerializer(serializers.ModelSerializer):
         if self.instance:
             duplicados = duplicados.exclude(pk=self.instance.pk)
         if duplicados.exists():
-            raise serializers.ValidationError('Ya existe un producto con ese nombre en la categoría seleccionada.')
+            raise serializers.ValidationError('Ya existe un producto con ese nombre en la categorÃ­a seleccionada.')
         return nombre
 
     def validate_moneda_origen(self, value):
@@ -545,7 +621,7 @@ class ProductoSerializer(serializers.ModelSerializer):
             return None
         valor = value.strip().upper()
         if valor not in ('A', 'B', 'C'):
-            raise serializers.ValidationError('La clasificación ABC debe ser A, B o C.')
+            raise serializers.ValidationError('La clasificaciÃ³n ABC debe ser A, B o C.')
         return valor
 
     def validate_estado(self, value):
@@ -558,11 +634,11 @@ class ProductoSerializer(serializers.ModelSerializer):
         stock_minimo = attrs.get('stock_minimo', getattr(self.instance, 'stock_minimo', 0))
         stock_maximo = attrs.get('stock_maximo', getattr(self.instance, 'stock_maximo', None))
         if stock_minimo is not None and stock_minimo < 0:
-            raise serializers.ValidationError({'stock_minimo': 'El stock mínimo no puede ser negativo.'})
+            raise serializers.ValidationError({'stock_minimo': 'El stock mÃ­nimo no puede ser negativo.'})
         if stock_maximo is not None and stock_maximo < 0:
-            raise serializers.ValidationError({'stock_maximo': 'El stock máximo no puede ser negativo.'})
+            raise serializers.ValidationError({'stock_maximo': 'El stock mÃ¡ximo no puede ser negativo.'})
         if stock_maximo is not None and stock_maximo < stock_minimo:
-            raise serializers.ValidationError({'stock_maximo': 'El stock máximo no puede ser menor que el stock mínimo.'})
+            raise serializers.ValidationError({'stock_maximo': 'El stock mÃ¡ximo no puede ser menor que el stock mÃ­nimo.'})
         return attrs
 
 
@@ -580,7 +656,7 @@ class ProveedorSerializer(serializers.ModelSerializer):
     def validate_razon_social(self, value):
         value = value.strip()
         if not value:
-            raise serializers.ValidationError('La razón social es obligatoria.')
+            raise serializers.ValidationError('La razÃ³n social es obligatoria.')
         return value
 
     def validate_nit(self, value):
@@ -597,7 +673,7 @@ class ProveedorSerializer(serializers.ModelSerializer):
     def validate_moneda_facturacion(self, value):
         value = value.strip().upper()
         if not value:
-            raise serializers.ValidationError('La moneda de facturación es obligatoria.')
+            raise serializers.ValidationError('La moneda de facturaciÃ³n es obligatoria.')
         return value
 
     def validate_telefono(self, value):
@@ -614,13 +690,13 @@ class ProveedorSerializer(serializers.ModelSerializer):
 # CU17: REGISTRAR EJERCICIO
 # ============================================================
 class EjercicioSerializer(serializers.ModelSerializer):
-    """Alta y edición de ejercicios del catálogo del gimnasio.
+    """Alta y ediciÃ³n de ejercicios del catÃ¡logo del gimnasio.
 
     Reglas de negocio:
     - El nombre es obligatorio y no puede repetirse dentro del mismo grupo
       muscular (evita duplicados como "Press de banca" / "press banca").
-    - El grupo muscular se valida contra el catálogo ``GRUPOS_MUSCULARES``.
-    - El video es opcional, pero si se informa debe ser una URL válida.
+    - El grupo muscular se valida contra el catÃ¡logo ``GRUPOS_MUSCULARES``.
+    - El video es opcional, pero si se informa debe ser una URL vÃ¡lida.
     """
 
     class Meta:
@@ -649,7 +725,7 @@ class EjercicioSerializer(serializers.ModelSerializer):
         validos = dict(GRUPOS_MUSCULARES).keys()
         if value not in validos:
             raise serializers.ValidationError(
-                f'Grupo muscular inválido. Opciones: {", ".join(sorted(validos))}.'
+                f'Grupo muscular invÃ¡lido. Opciones: {", ".join(sorted(validos))}.'
             )
         return value
 
@@ -658,13 +734,13 @@ class EjercicioSerializer(serializers.ModelSerializer):
             return value
         value = value.strip()
         if not value.lower().startswith(('http://', 'https://')):
-            raise serializers.ValidationError('El video debe ser una URL http(s) válida.')
+            raise serializers.ValidationError('El video debe ser una URL http(s) vÃ¡lida.')
         return value
 
     def validate(self, attrs):
         nombre = (attrs.get('nombre_ejercicio') or '').strip().lower()
         grupo = attrs.get('grupo_muscular')
-        # En edición se excluye el propio registro del control de duplicados.
+        # En ediciÃ³n se excluye el propio registro del control de duplicados.
         excluido = self.instance.pk if self.instance else None
         duplicado = (
             Ejercicio.objects.filter(nombre_ejercicio__iexact=nombre, grupo_muscular=grupo)
@@ -680,7 +756,7 @@ class EjercicioSerializer(serializers.ModelSerializer):
 
 
 class EjercicioListSerializer(serializers.ModelSerializer):
-    """Lectura del catálogo (lista y detalle)."""
+    """Lectura del catÃ¡logo (lista y detalle)."""
     en_rutinas = serializers.IntegerField(read_only=True)
 
     class Meta:
@@ -699,7 +775,7 @@ class EjercicioListSerializer(serializers.ModelSerializer):
 
 
 # ============================================================
-# CU18: DISEÑAR RUTINA DE ENTRENAMIENTO
+# CU18: DISEÃ‘AR RUTINA DE ENTRENAMIENTO
 # ============================================================
 class DetalleRutinaSerializer(serializers.ModelSerializer):
     """Fila de la rutina: ejercicio + series + repeticiones + descanso."""
@@ -767,14 +843,14 @@ class RutinaSerializer(serializers.ModelSerializer):
 
 
 class RutinaConDetallesSerializer(serializers.Serializer):
-    """CU18: crea/actualiza la rutina JUNTO CON sus ejercicios, en una sola petición.
+    """CU18: crea/actualiza la rutina JUNTO CON sus ejercicios, en una sola peticiÃ³n.
 
-    El cliente envía un único JSON con la cabecera de la rutina y la lista
+    El cliente envÃ­a un Ãºnico JSON con la cabecera de la rutina y la lista
     ``ejercicios``. El servidor valida que:
     - haya al menos un ejercicio,
     - no haya ejercicios repetidos dentro de la rutina,
-    - todos los ejercicios estén activos.
-    La escritura es atómica: si algo falla, no se guarda nada.
+    - todos los ejercicios estÃ©n activos.
+    La escritura es atÃ³mica: si algo falla, no se guarda nada.
     """
 
     nombre_rutina = serializers.CharField(max_length=100)
@@ -802,7 +878,7 @@ class RutinaConDetallesSerializer(serializers.Serializer):
             clave = detalle['id_ejercicio'].pk
             if clave in vistos:
                 raise serializers.ValidationError(
-                    f'El ejercicio "{detalle["id_ejercicio"].nombre_ejercicio}" está repetido '
+                    f'El ejercicio "{detalle["id_ejercicio"].nombre_ejercicio}" estÃ¡ repetido '
                     'dentro de la rutina.'
                 )
             vistos.add(clave)
@@ -832,8 +908,8 @@ class RutinaConDetallesSerializer(serializers.Serializer):
                 setattr(instance, attr, value)
             instance.save()
 
-            # Se reconstruye el plan completo (alta/edición/baja de ejercicios
-            # en una sola operación) respetando el orden recibido.
+            # Se reconstruye el plan completo (alta/ediciÃ³n/baja de ejercicios
+            # en una sola operaciÃ³n) respetando el orden recibido.
             instance.detalles.all().delete()
             DetalleRutina.objects.bulk_create([
                 DetalleRutina(
@@ -853,11 +929,11 @@ class RutinaConDetallesSerializer(serializers.Serializer):
 # CU19: ASIGNAR RUTINA A SOCIO
 # ============================================================
 class AsignacionRutinaSerializer(serializers.ModelSerializer):
-    """Asocia una rutina existente a un socio con membresía vigente.
+    """Asocia una rutina existente a un socio con membresÃ­a vigente.
 
     Reglas de negocio:
     - El socio debe tener la cuenta activa.
-    - El socio debe tener membresía **Vigente** (se reutiliza
+    - El socio debe tener membresÃ­a **Vigente** (se reutiliza
       ``resumen_membresia`` para no duplicar criterios de vigencia).
     - La rutina debe estar activa.
     - No se puede asignar dos veces la misma rutina activa al mismo socio.
@@ -869,7 +945,7 @@ class AsignacionRutinaSerializer(serializers.ModelSerializer):
     entrenador_username = serializers.CharField(source='id_entrenador.id_entrenador.username', read_only=True)
     membresia = serializers.SerializerMethodField()
 
-    # Opcional: si el cliente no lo envía, la vista firma la asignación con
+    # Opcional: si el cliente no lo envÃ­a, la vista firma la asignaciÃ³n con
     # el perfil de Entrenador del usuario autenticado.
     id_entrenador = serializers.PrimaryKeyRelatedField(
         queryset=Entrenador.objects.all(), required=False, allow_null=True
@@ -911,8 +987,8 @@ class AsignacionRutinaSerializer(serializers.ModelSerializer):
             membresia = resumen_membresia(socio)
             if membresia['estado'] != 'Vigente':
                 raise serializers.ValidationError({
-                    'id_socio': f'El socio no puede recibir rutinas: su membresía está '
-                                f'"{membresia["estado"]}". Renueve la membresía (CU06) primero.'
+                    'id_socio': f'El socio no puede recibir rutinas: su membresÃ­a estÃ¡ '
+                                f'"{membresia["estado"]}". Renueve la membresÃ­a (CU06) primero.'
                 })
 
         if rutina is not None and rutina.estado != 'Activo':
@@ -929,7 +1005,7 @@ class AsignacionRutinaSerializer(serializers.ModelSerializer):
             )
             if duplicada:
                 raise serializers.ValidationError({
-                    'id_rutina': f'La rutina "{rutina.nombre_rutina}" ya está asignada '
+                    'id_rutina': f'La rutina "{rutina.nombre_rutina}" ya estÃ¡ asignada '
                                  'y activa para este socio.'
                 })
 
@@ -940,7 +1016,7 @@ class AsignacionRutinaSerializer(serializers.ModelSerializer):
 # CU20: GESTIONAR PERFIL DE ENTRENADOR
 # ============================================================
 class HorarioEntrenadorSerializer(serializers.ModelSerializer):
-    """Disponibilidad semanal del entrenador (día + turno del catálogo)."""
+    """Disponibilidad semanal del entrenador (dÃ­a + turno del catÃ¡logo)."""
 
     dia_semana_display = serializers.CharField(source='get_dia_semana_display', read_only=True)
     turno_nombre = serializers.CharField(source='id_turno.nombre_turno', read_only=True)
@@ -963,16 +1039,16 @@ class HorarioEntrenadorSerializer(serializers.ModelSerializer):
     def validate_dia_semana(self, value):
         validos = dict(DIAS_SEMANA).keys()
         if value not in validos:
-            raise serializers.ValidationError(f'Día inválido. Opciones: {", ".join(sorted(validos))}.')
+            raise serializers.ValidationError(f'DÃ­a invÃ¡lido. Opciones: {", ".join(sorted(validos))}.')
         return value
 
 
 class EntrenadorSerializer(serializers.ModelSerializer):
     """Perfil del entrenador: datos personales + especialidad + horarios.
 
-    Los campos de la cuenta (username, email, ci, teléfono) se leen desde el
-    ``Usuario`` relacionado y son de solo lectura aquí; la gestión de la
-    contraseña queda en el módulo de usuarios (CU01).
+    Los campos de la cuenta (username, email, ci, telÃ©fono) se leen desde el
+    ``Usuario`` relacionado y son de solo lectura aquÃ­; la gestiÃ³n de la
+    contraseÃ±a queda en el mÃ³dulo de usuarios (CU01).
     """
 
     username = serializers.CharField(source='id_entrenador.username', read_only=True)
@@ -1006,7 +1082,7 @@ class RegistrarEntrenadorSerializer(serializers.Serializer):
     """CU20: alta completa de entrenador (cuenta + perfil + horarios).
 
     Crea la ``Usuario`` con el rol ``es_entrenador`` y su perfil ``Entrenador``
-    en la misma operación atómica, replicando el patrón de CU04 (Registrar
+    en la misma operaciÃ³n atÃ³mica, replicando el patrÃ³n de CU04 (Registrar
     Socio). Los horarios se reciben como lista opcional de
     ``{id_turno, dia_semana}``.
     """
@@ -1043,14 +1119,14 @@ class RegistrarEntrenadorSerializer(serializers.Serializer):
             if clave in vistos:
                 raise serializers.ValidationError(
                     f'El turno {horario["id_turno"].nombre_turno} del '
-                    f'{horario["dia_semana"]} está duplicado.'
+                    f'{horario["dia_semana"]} estÃ¡ duplicado.'
                 )
             vistos.add(clave)
         return horarios
 
     def validate(self, attrs):
         if attrs.get('password') != attrs.get('password2'):
-            raise serializers.ValidationError({'password2': 'Las contraseñas no coinciden.'})
+            raise serializers.ValidationError({'password2': 'Las contraseÃ±as no coinciden.'})
         try:
             validate_password(attrs.get('password'))
         except ValidationError as e:
@@ -1094,7 +1170,7 @@ class RegistrarEntrenadorSerializer(serializers.Serializer):
 
 
 # ============================================================
-# CU03: Registrar Bitácora de Auditoría
+# CU03: Registrar BitÃ¡cora de AuditorÃ­a
 # ============================================================
 class BitacoraSerializer(serializers.ModelSerializer):
     usuario_username = serializers.SerializerMethodField()
@@ -1121,11 +1197,11 @@ class BitacoraSerializer(serializers.ModelSerializer):
 
 
 # ============================================================
-# CU04: Registrar Expediente de Socio (alta desde Recepción)
+# CU04: Registrar Expediente de Socio (alta desde RecepciÃ³n)
 # ============================================================
 class RegistrarSocioSerializer(serializers.Serializer):
     """Crea la cuenta de Usuario (rol Socio) + su expediente (Socio),
-    y opcionalmente asigna un plan de membresía inicial (crea el
+    y opcionalmente asigna un plan de membresÃ­a inicial (crea el
     primer ContratoMembresia, ligado a CU06)."""
 
     username = serializers.CharField(max_length=150)
@@ -1163,7 +1239,7 @@ class RegistrarSocioSerializer(serializers.Serializer):
 
     def validate(self, attrs):
         if attrs.get('password') != attrs.get('password2'):
-            raise serializers.ValidationError({'password2': 'Las contraseñas no coinciden.'})
+            raise serializers.ValidationError({'password2': 'Las contraseÃ±as no coinciden.'})
         try:
             validate_password(attrs.get('password'))
         except ValidationError as e:
@@ -1194,8 +1270,8 @@ class RegistrarSocioSerializer(serializers.Serializer):
 
         contrato = None
         if plan is not None:
-            # Membresía inicial con pago completo y método real (Efectivo por
-            # defecto si no se indica). Reutiliza la misma lógica que CU06.
+            # MembresÃ­a inicial con pago completo y mÃ©todo real (Efectivo por
+            # defecto si no se indica). Reutiliza la misma lÃ³gica que CU06.
             if metodo_pago is None:
                 metodo_pago = metodo_pago_por_defecto()
             contrato = crear_contrato_pagado(socio=socio, plan=plan, metodo_pago=metodo_pago)
@@ -1236,7 +1312,7 @@ class RegistrarCompraSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError({'detalles': 'La compra debe incluir al menos un producto.'})
         ids = [d['id_producto'].pk for d in detalles]
         if len(ids) != len(set(ids)):
-            raise serializers.ValidationError({'detalles': 'No repita productos; agrupe sus cantidades en una sola línea.'})
+            raise serializers.ValidationError({'detalles': 'No repita productos; agrupe sus cantidades en una sola lÃ­nea.'})
         return attrs
 
     @transaction.atomic
@@ -1257,10 +1333,10 @@ class RegistrarCompraSerializer(serializers.ModelSerializer):
         producto_ids = sorted(d['id_producto'].pk for d in detalles_data)
         productos = {p.pk: p for p in Producto.objects.select_for_update().filter(pk__in=producto_ids).order_by('pk')}
         if len(productos) != len(producto_ids):
-            raise serializers.ValidationError({'detalles': 'Uno o más productos ya no existen.'})
+            raise serializers.ValidationError({'detalles': 'Uno o mÃ¡s productos ya no existen.'})
         for producto in productos.values():
             if producto.estado.lower() != 'activo':
-                raise serializers.ValidationError({'detalles': f"El producto '{producto.nombre_producto}' está inactivo."})
+                raise serializers.ValidationError({'detalles': f"El producto '{producto.nombre_producto}' estÃ¡ inactivo."})
 
         lineas = []
         total_origen = Decimal('0.00')
@@ -1342,3 +1418,51 @@ class AlertaReposicionSerializer(serializers.ModelSerializer):
                   'stock_minimo', 'nivel_urgencia', 'cantidad_sugerida',
                   'estado_alerta', 'fecha_generacion', 'fecha_cierre']
         read_only_fields = fields
+
+class ArqueoCajaSerializer(serializers.ModelSerializer):
+    responsable_nombre = serializers.CharField(source='responsable.username', read_only=True)
+    turno_nombre = serializers.CharField(source='turno.nombre_turno', read_only=True)
+
+    class Meta:
+        model = ArqueoCaja
+        fields = [
+            'id_caja', 'responsable', 'responsable_nombre',
+            'turno', 'turno_nombre', 'fecha_apertura',
+            'fecha_cierre', 'monto_inicial', 'monto_final',
+            'efectivo_contado', 'diferencia', 'estado'
+        ]
+        read_only_fields = fields
+
+class ArqueoCajaSerializer(serializers.ModelSerializer):
+    responsable_nombre = serializers.CharField(source='responsable.username', read_only=True)
+    turno_nombre = serializers.CharField(source='turno.nombre_turno', read_only=True)
+
+    class Meta:
+        model = ArqueoCaja
+        fields = [
+            'id_caja', 'responsable', 'responsable_nombre',
+            'turno', 'turno_nombre', 'fecha_apertura',
+            'fecha_cierre', 'monto_inicial', 'monto_final',
+            'efectivo_contado', 'diferencia', 'estado'
+        ]
+        read_only_fields = fields
+
+
+class EgresoCajaSerializer(serializers.ModelSerializer):
+    usuario_nombre = serializers.CharField(source='usuario.username', read_only=True)
+
+    class Meta:
+        model = EgresoCaja
+        fields = ['id_egreso', 'caja', 'usuario', 'usuario_nombre', 'fecha_hora', 'concepto', 'monto', 'observacion']
+        read_only_fields = ['id_egreso', 'caja', 'usuario', 'usuario_nombre', 'fecha_hora']
+
+    def validate_monto(self, value):
+        if value <= 0:
+            raise serializers.ValidationError('El monto debe ser mayor que cero.')
+        return value
+
+    def validate_concepto(self, value):
+        value = value.strip()
+        if not value:
+            raise serializers.ValidationError('El concepto es obligatorio.')
+        return value

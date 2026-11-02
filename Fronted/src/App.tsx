@@ -6,9 +6,13 @@ import CategoriasScreen from './components/CategoriasScreen';
 import ProductosScreen from './components/ProductosScreen';
 import ProveedoresScreen from './components/ProveedoresScreen';
 import ComprasScreen from './components/ComprasScreen';
+import VentasPOSScreen from './components/VentasPOSScreen';
+import HistorialVentasScreen from './components/HistorialVentasScreen';
 import KardexScreen from './components/KardexScreen';
 import AlertasScreen from './components/AlertasScreen';
 import TipoCambioScreen from './components/TipoCambioScreen';
+import CajaScreen from './components/CajaScreen';
+import MetodosPagoScreen from './components/MetodosPagoScreen';
 import {
   iniciarActividad,
   iniciarSesionInactividad,
@@ -154,9 +158,13 @@ interface NavbarProps {
   onProductos: () => void;
   onProveedores: () => void;
   onCompras: () => void;
+  onVentas: () => void;
+  onHistorialVentas: () => void;
   onKardex: () => void;
   onAlertas: () => void;
   onTipoCambio: () => void;
+  onCaja: () => void;
+  onMetodosPago: () => void;
   onRegistrarContrato: () => void;
   onEntrenamiento: () => void;
   onInicio: () => void;
@@ -173,9 +181,13 @@ export const Navbar = ({
   onProductos,
   onProveedores,
   onCompras,
+  onVentas,
+  onHistorialVentas,
   onKardex,
   onAlertas,
   onTipoCambio,
+  onCaja,
+  onMetodosPago,
   onRegistrarContrato,
   onEntrenamiento,
   onInicio,
@@ -345,6 +357,19 @@ export const Navbar = ({
         </div>
       )}
 
+      {/* CU08: Punto de venta — administración y recepción */}
+      {(usuario.es_administrador || usuario.es_recepcionista) && (
+        <button onClick={onVentas} className={pantallaActual === 'ventas' ? btnActivo : btnInactivo}>
+          PUNTO DE VENTA
+        </button>
+      )}
+
+      {(usuario.es_administrador || usuario.es_recepcionista) && (
+        <button onClick={onHistorialVentas} className={pantallaActual === 'historial-ventas' ? btnActivo : btnInactivo}>
+          HISTORIAL DE VENTAS
+        </button>
+      )}
+
       {/* CU11: Administración de categorías — solo Administrador */}
       {usuario.es_administrador && (
         <button onClick={onCategorias} className={pantallaActual === 'categorias' ? btnActivo : btnInactivo}>
@@ -390,6 +415,16 @@ export const Navbar = ({
             ALERTAS
           </button>
         </>
+      )}
+
+      {usuario.es_administrador && (
+        <button onClick={onMetodosPago} className={pantallaActual === 'metodos-pago' ? btnActivo : btnInactivo}>MÉTODOS DE PAGO</button>
+      )}
+
+      {(usuario.es_administrador || usuario.es_recepcionista) && (
+        <button onClick={onCaja} className={pantallaActual === 'caja' ? btnActivo : btnInactivo}>
+          ARQUEO Y CAJA
+        </button>
       )}
 
       {/* Configuración general: solo Administrador */}
@@ -3377,9 +3412,13 @@ export default function App() {
     | 'productos'
     | 'proveedores'
     | 'compras'
+    | 'ventas'
+    | 'historial-ventas'
     | 'kardex'
     | 'alertas'
     | 'configuracion'
+    | 'metodos-pago'
+    | 'caja'
     | 'contrato'
     | 'entrenamiento'
   >((new URLSearchParams(window.location.search).has('token') || new URLSearchParams(window.location.search).get('paypal') === 'cancelado') ? 'contrato' : 'inicio');
@@ -3413,9 +3452,13 @@ export default function App() {
         onProductos={() => setPantalla('productos')}
         onProveedores={() => setPantalla('proveedores')}
         onCompras={() => setPantalla('compras')}
+        onVentas={() => setPantalla('ventas')}
+        onHistorialVentas={() => setPantalla('historial-ventas')}
         onKardex={() => setPantalla('kardex')}
         onAlertas={() => setPantalla('alertas')}
         onTipoCambio={() => setPantalla('configuracion')}
+        onCaja={() => setPantalla('caja')}
+        onMetodosPago={() => setPantalla('metodos-pago')}
         onRegistrarContrato={() => setPantalla('contrato')}
         onEntrenamiento={() => setPantalla('entrenamiento')}
       />
@@ -3450,12 +3493,20 @@ export default function App() {
           <ProveedoresScreen onVolver={() => setPantalla('inicio')} />
         ) : pantalla === 'compras' ? (
           <ComprasScreen onVolver={() => setPantalla('inicio')} />
+        ) : pantalla === 'ventas' ? (
+          <VentasPOSScreen onVolver={() => setPantalla('inicio')} />
+        ) : pantalla === 'historial-ventas' ? (
+          <HistorialVentasScreen onVolver={() => setPantalla('inicio')} />
         ) : pantalla === 'kardex' ? (
           <KardexScreen onVolver={() => setPantalla('inicio')} />
         ) : pantalla === 'alertas' ? (
           <AlertasScreen onVolver={() => setPantalla('inicio')} />
+        ) : pantalla === 'metodos-pago' ? (
+          <MetodosPagoScreen onVolver={() => setPantalla('inicio')} />
         ) : pantalla === 'configuracion' ? (
           <TipoCambioScreen onVolver={() => setPantalla('inicio')} />
+        ) : pantalla === 'caja' ? (
+          <CajaScreen onVolver={() => setPantalla('inicio')} />
         ) : pantalla === 'contrato' ? (
           <PantallaRegistrarContratoMembresia
             onVolver={() => setPantalla('inicio')}

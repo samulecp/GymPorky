@@ -6,6 +6,8 @@ from axes.models import AccessAttempt
 from decouple import config
 from rest_framework import status, permissions, viewsets, mixins, serializers  # <--- Se agregó viewsets aquí
 from rest_framework.response import Response
+from django.shortcuts import get_object_or_404
+from decimal import Decimal
 from rest_framework.views import APIView
 from rest_framework.decorators import action
 from django.http import HttpResponse
@@ -15,9 +17,9 @@ from django.utils.encoding import force_bytes, force_str
 from django.contrib.auth import get_user_model
 from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError
-from django.db import transaction
+from django.db import transaction, IntegrityError
 from django.utils import timezone
-from django.db.models import Q, Count, F
+from django.db.models import Q, Count, F, Sum
 from rest_framework_simplejwt.views import TokenObtainPairView
 from .emails import enviar_correo_brevo
 
@@ -26,7 +28,7 @@ from .models import (
     Usuario, Socio, PlanMembresia, MetodoPago, Venta, Producto, CategoriaProducto, Proveedor, Compra, DetalleCompra, Administrador, KardexInventario,
     Ejercicio, Rutina, Bitacora,
     DetalleRutina, AsignacionRutina, Entrenador, HorarioEntrenador, Turno,
-    GRUPOS_MUSCULARES, AlertaReposicion,
+    GRUPOS_MUSCULARES, AlertaReposicion, ArqueoCaja, EgresoCaja,
 )
 from .membresias import asegurar_metodos_pago
 from .serializers import (
@@ -38,7 +40,7 @@ from .serializers import (
     EntrenadorSerializer, RegistrarEntrenadorSerializer,
     HorarioEntrenadorSerializer, TurnoSerializer,
     LoginSerializer, AlertaReposicionSerializer,
-    BitacoraSerializer, RegistrarSocioSerializer,
+    BitacoraSerializer, RegistrarSocioSerializer, ArqueoCajaSerializer, EgresoCajaSerializer,
 )
 
 User = get_user_model()
@@ -472,17 +474,55 @@ class PlanMembresiaViewSet(viewsets.ModelViewSet):
 # Lectura exclusiva para Administrador y Recepcionista (se usa en el registro
 # de contratos de membresía).
 # ----------------------------------------------------------------------------
-class MetodoPagoViewSet(viewsets.ReadOnlyModelViewSet):
-    queryset = MetodoPago.objects.all()
+class MetodoPagoViewSet(viewsets.ModelViewSet):
+    queryset = MetodoPago.objects.all().order_by('descripcion')
     serializer_class = MetodoPagoSerializer
     permission_classes = [EsAdministradorORecepcionista]
 
+    def get_permissions(self):
+        # Solo administración puede modificar el catálogo; recepción solo consulta.
+        if self.action in ('create', 'update', 'partial_update', 'destroy', 'desactivar', 'activar'):
+            return [EsAdministrador()]
+        return [EsAdministradorORecepcionista()]
+
     def list(self, request, *args, **kwargs):
-        # Garantiza de forma idempotente que existan los métodos base
-        # (Efectivo y Transferencia bancaria) antes de exponer el catálogo,
-        # sin duplicar ni alterar los ya existentes.
         asegurar_metodos_pago()
         return super().list(request, *args, **kwargs)
+
+    def perform_create(self, serializer):
+        metodo = serializer.save(descripcion=serializer.validated_data['descripcion'].strip())
+        registrar_bitacora(self.request, 'CREATE', 'metodo_pago',
+            f"Creó el método de pago '{metodo.descripcion}'.", usuario=self.request.user)
+
+    def perform_update(self, serializer):
+        anterior = self.get_object().descripcion
+        metodo = serializer.save(descripcion=serializer.validated_data.get('descripcion', anterior).strip())
+        registrar_bitacora(self.request, 'UPDATE', 'metodo_pago',
+            f"Actualizó el método de pago '{anterior}' a '{metodo.descripcion}' (activo={metodo.activo}).", usuario=self.request.user)
+
+    def destroy(self, request, *args, **kwargs):
+        return Response({'detail': 'No se permite eliminar métodos de pago para conservar el historial. Desactívelo.'}, status=status.HTTP_405_METHOD_NOT_ALLOWED)
+
+    @action(detail=True, methods=['post'])
+    def desactivar(self, request, pk=None):
+        metodo = self.get_object()
+        if not metodo.activo:
+            return Response({'detail': 'El método ya está inactivo.'}, status=status.HTTP_400_BAD_REQUEST)
+        metodo.activo = False
+        metodo.save(update_fields=['activo'])
+        registrar_bitacora(request, 'UPDATE', 'metodo_pago', f"Desactivó el método de pago '{metodo.descripcion}'.", usuario=request.user)
+        return Response(self.get_serializer(metodo).data)
+
+    @action(detail=True, methods=['post'])
+    def activar(self, request, pk=None):
+        metodo = self.get_object()
+        if metodo.activo:
+            return Response({'detail': 'El método ya está activo.'}, status=status.HTTP_400_BAD_REQUEST)
+        metodo.activo = True
+        metodo.save(update_fields=['activo'])
+        registrar_bitacora(request, 'UPDATE', 'metodo_pago', f"Activó el método de pago '{metodo.descripcion}'.", usuario=request.user)
+        return Response(self.get_serializer(metodo).data)
+
 
 
 # ----------------------------------------------------------------------------
@@ -572,8 +612,107 @@ class BitacoraViewSet(mixins.ListModelMixin, viewsets.GenericViewSet):
         return response
 
 class VentaViewSet(viewsets.ModelViewSet):
-    queryset = Venta.objects.all()
+    queryset = Venta.objects.select_related('caja', 'id_usuario', 'id_metodo_pago', 'id_socio').all()
     serializer_class = VentaSerializer
+
+    def get_permissions(self):
+        return [permissions.IsAuthenticated()]
+
+    def perform_create(self, serializer):
+        caja = ArqueoCaja.objects.filter(estado='ABIERTA').first()
+        if not caja:
+            raise serializers.ValidationError({'detail': 'No hay una caja abierta. Solicita la apertura antes de registrar ventas.'})
+        if caja.responsable_id != self.request.user.id:
+            raise serializers.ValidationError({'detail': f'La caja está asignada a {caja.responsable.username if caja.responsable else "otro usuario"}. Solo su responsable puede registrar ventas.'})
+        serializer.save(id_usuario=self.request.user, caja=caja)
+        registrar_bitacora(self.request, 'CREATE', 'venta', f"Venta registrada en caja #{caja.id_caja} por {self.request.user.username}.", usuario=self.request.user)
+
+
+class CajaViewSet(viewsets.ViewSet):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def _caja_abierta(self):
+        return ArqueoCaja.objects.select_related('responsable', 'turno').filter(estado='ABIERTA').first()
+
+    def list(self, request):
+        abierta = self._caja_abierta()
+        historial = ArqueoCaja.objects.select_related('responsable', 'turno').order_by('-fecha_apertura')[:100]
+        return Response({'abierta': ArqueoCajaSerializer(abierta).data if abierta else None,
+                         'historial': ArqueoCajaSerializer(historial, many=True).data,
+                         'es_responsable': bool(abierta and abierta.responsable_id == request.user.id)})
+
+    @action(detail=False, methods=['post'])
+    def abrir(self, request):
+        if not (request.user.es_administrador or request.user.es_recepcionista):
+            return Response({'detail': 'No tienes permiso para abrir caja.'}, status=403)
+        try:
+            monto = request.data.get('monto_inicial')
+            turno_id = request.data.get('turno')
+            if monto is None or Decimal(str(monto)) < 0:
+                return Response({'detail': 'Indica un monto inicial válido.'}, status=400)
+            turno = Turno.objects.get(pk=turno_id) if turno_id else None
+            admin = Administrador.objects.filter(pk=request.user.pk).first()
+            with transaction.atomic():
+                if ArqueoCaja.objects.select_for_update().filter(estado='ABIERTA').exists():
+                    return Response({'detail': 'Ya existe una caja abierta en el sistema.'}, status=409)
+                caja = ArqueoCaja.objects.create(id_administrador=admin, responsable=request.user, turno=turno,
+                    fecha_apertura=timezone.now(), monto_inicial=monto, estado='ABIERTA')
+                registrar_bitacora(request, 'CREATE', 'arqueo_caja', f"Apertura de caja #{caja.id_caja}; fondo inicial Bs {monto}; turno {turno or 'No especificado'}.", usuario=request.user)
+            return Response(ArqueoCajaSerializer(caja).data, status=201)
+        except Turno.DoesNotExist:
+            return Response({'detail': 'El turno seleccionado no existe.'}, status=400)
+        except IntegrityError:
+            return Response({'detail': 'Otro usuario acaba de abrir una caja. Solo puede existir una caja abierta.'}, status=409)
+        except Exception as exc:
+            return Response({'detail': str(exc)}, status=400)
+
+    @action(detail=False, methods=['post'])
+    def egresos(self, request):
+        caja = self._caja_abierta()
+        if not caja:
+            return Response({'detail': 'No hay una caja abierta.'}, status=400)
+        if caja.responsable_id != request.user.id:
+            return Response({'detail': 'Solo el responsable de la caja puede registrar egresos.'}, status=403)
+        serializer = EgresoCajaSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        with transaction.atomic():
+            egreso = serializer.save(caja=caja, usuario=request.user)
+            registrar_bitacora(request, 'CREATE', 'egreso_caja', f"Egreso caja #{caja.id_caja}: {egreso.concepto}, Bs {egreso.monto}.", usuario=request.user)
+        return Response(EgresoCajaSerializer(egreso).data, status=201)
+
+    @action(detail=True, methods=['get'])
+    def resumen(self, request, pk=None):
+        caja = get_object_or_404(ArqueoCaja, pk=pk)
+        ventas_efectivo = caja.ventas.filter(id_metodo_pago__descripcion__iexact='Efectivo').aggregate(total=Sum('monto_total_local'))['total'] or 0
+        ventas_transferencia = caja.ventas.exclude(id_metodo_pago__descripcion__iexact='Efectivo').aggregate(total=Sum('monto_total_local'))['total'] or 0
+        egresos = caja.egresos.aggregate(total=Sum('monto'))['total'] or 0
+        esperado = caja.monto_inicial + ventas_efectivo - egresos
+        return Response({'caja': ArqueoCajaSerializer(caja).data, 'ventas_efectivo': ventas_efectivo,
+                         'ventas_transferencia': ventas_transferencia, 'egresos': egresos, 'efectivo_esperado': esperado,
+                         'egresos_detalle': EgresoCajaSerializer(caja.egresos.all(), many=True).data})
+
+    @action(detail=True, methods=['post'])
+    def cerrar(self, request, pk=None):
+        with transaction.atomic():
+            caja = ArqueoCaja.objects.select_for_update().filter(pk=pk, estado='ABIERTA').first()
+            if not caja:
+                return Response({'detail': 'La caja no existe o ya está cerrada.'}, status=404)
+            if caja.responsable_id != request.user.id:
+                return Response({'detail': 'Solo el responsable asignado puede cerrar esta caja.'}, status=403)
+            try:
+                contado = Decimal(str(request.data.get('efectivo_contado')))
+                if contado < 0: raise ValueError()
+            except Exception:
+                return Response({'detail': 'Indica el efectivo contado (cero o más).'}, status=400)
+            efectivo = caja.monto_inicial + (caja.ventas.filter(id_metodo_pago__descripcion__iexact='Efectivo').aggregate(total=Sum('monto_total_local'))['total'] or Decimal('0')) - (caja.egresos.aggregate(total=Sum('monto'))['total'] or Decimal('0'))
+            caja.efectivo_contado = contado
+            caja.monto_final = contado
+            caja.diferencia = contado - efectivo
+            caja.fecha_cierre = timezone.now()
+            caja.estado = 'CERRADA'
+            caja.save(update_fields=['efectivo_contado', 'monto_final', 'diferencia', 'fecha_cierre', 'estado'])
+            registrar_bitacora(request, 'UPDATE', 'arqueo_caja', f"Cierre caja #{caja.id_caja}; esperado Bs {efectivo}; contado Bs {contado}; diferencia Bs {caja.diferencia}.", usuario=request.user)
+        return Response(ArqueoCajaSerializer(caja).data)
 
 class ProductoViewSet(viewsets.ModelViewSet):
     """CU12: catálogo de productos comerciales.
