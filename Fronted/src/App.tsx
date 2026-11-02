@@ -192,8 +192,7 @@ export const Navbar = ({
   onEntrenamiento,
   onInicio,
 }: NavbarProps) => {
-  const [menuUsuariosAbierto, setMenuUsuariosAbierto] = useState(false);
-  const [menuMembresiasAbierto, setMenuMembresiasAbierto] = useState(false);
+  const [grupoAbierto, setGrupoAbierto] = useState<string | null>(null);
 
   const token = localStorage.getItem('access_token');
   const usuarioGuardado = localStorage.getItem('usuario');
@@ -202,88 +201,72 @@ export const Navbar = ({
 
   const usuario: UsuarioActual = JSON.parse(usuarioGuardado);
 
-  const btnActivo = 'px-3 py-1 bg-yellow-500 text-black rounded font-bold';
-  const btnInactivo = 'px-3 py-1 bg-gray-800 rounded text-white hover:bg-gray-700';
+  const btnActivo = 'px-3 py-2 bg-yellow-500 text-black rounded font-bold';
+  const btnInactivo = 'px-3 py-2 bg-gray-800 rounded text-white hover:bg-gray-700';
+  const opcionBase = 'w-full text-left px-4 py-2 whitespace-normal break-words hover:bg-gray-700';
+  const opcion = (pantallas: string[]) =>
+    `${opcionBase} ${pantallas.includes(pantallaActual) ? 'text-yellow-400 font-bold' : 'text-white'}`;
+
+  const alternarGrupo = (grupo: string) =>
+    setGrupoAbierto((actual) => (actual === grupo ? null : grupo));
+
+  const cerrarGrupo = () => setGrupoAbierto(null);
+
+  const grupoActivo = (pantallas: string[]) => pantallas.includes(pantallaActual);
+  const grupoBoton = (pantallas: string[]) =>
+    `${grupoActivo(pantallas) ? btnActivo : btnInactivo} flex items-center gap-2`;
+
+  const tieneSeguridad = usuario.es_administrador || usuario.es_recepcionista;
+  const tieneMembresias = usuario.es_administrador || usuario.es_recepcionista;
+  const tieneVentas = usuario.es_administrador || usuario.es_recepcionista;
+  // Inventario está reservado al administrador.
+  const tieneInventario = usuario.es_administrador;
+  // Socios, entrenadores y administradores comparten la entrada al módulo;
+  // EntrenamientoScreen muestra pestañas distintas según el rol.
+  const tieneEntrenamiento = usuario.es_administrador || usuario.es_entrenador || usuario.es_socio;
 
   return (
-    <nav className="flex flex-wrap bg-black text-white p-2 gap-2">
+    <nav className="relative flex flex-wrap items-center bg-black text-white p-2 gap-2 w-full">
       <button
-        onClick={onInicio}
+        onClick={() => {
+          onInicio();
+          cerrarGrupo();
+        }}
         className={pantallaActual === 'inicio' ? btnActivo : btnInactivo}
       >
         INICIO
       </button>
 
-      {/* PAQUETE 1: SEGURIDAD, AUTENTICACIÓN Y AUDITORÍA */}
-
-      {/* Menú desplegable: Gestión de usuarios + Agregar nuevo socio +
-          Entrenadores. Visible para Administrador y Recepcionista. Cada opción
-          conserva su propio permiso (Administrador ve las tres; Recepcionista
-          solo el alta de socios). */}
-      {(usuario.es_administrador || usuario.es_recepcionista) && (
+      {/* SEGURIDAD: cada opción conserva los permisos que tenía originalmente. */}
+      {tieneSeguridad && (
         <div className="relative">
           <button
-            onClick={() => setMenuUsuariosAbierto((abierto) => !abierto)}
-            aria-expanded={menuUsuariosAbierto}
-            className={`${
-              pantallaActual === 'usuarios' ||
-              pantallaActual === 'registrar-socio' ||
-              pantallaActual === 'entrenadores'
-                ? btnActivo
-                : btnInactivo
-            } flex items-center gap-1`}
+            onClick={() => alternarGrupo('seguridad')}
+            aria-expanded={grupoAbierto === 'seguridad'}
+            className={grupoBoton(['usuarios', 'entrenadores', 'registrar-socio', 'bitacora'])}
           >
-            GESTIÓN DE USUARIOS
-            <span className="text-xs">{menuUsuariosAbierto ? '▲' : '▼'}</span>
+            SEGURIDAD <span className="text-xs">{grupoAbierto === 'seguridad' ? '▲' : '▼'}</span>
           </button>
-
-          {menuUsuariosAbierto && (
-            <div className="absolute left-0 mt-1 z-20 min-w-max bg-gray-900 border border-gray-700 rounded shadow-lg flex flex-col">
-              {/* CU01: Registrar Cuenta de Usuario — solo Administrador */}
+          {grupoAbierto === 'seguridad' && (
+            <div className="absolute left-0 right-auto mt-1 z-30 w-max max-w-[calc(100vw-1rem)] max-h-[70vh] overflow-x-hidden overflow-y-auto bg-gray-900 border border-gray-700 rounded shadow-lg flex flex-col">
               {usuario.es_administrador && (
-                <button
-                  onClick={() => {
-                    onGestionUsuarios();
-                    setMenuUsuariosAbierto(false);
-                  }}
-                  className={`text-left px-4 py-2 whitespace-nowrap hover:bg-gray-700 ${
-                    pantallaActual === 'usuarios' ? 'text-yellow-400 font-bold' : 'text-white'
-                  }`}
-                >
+                <button onClick={() => { onGestionUsuarios(); cerrarGrupo(); }} className={opcion(['usuarios'])}>
                   Gestionar usuarios
                 </button>
               )}
-
-              {/* CU04: Registrar Expediente de Socio — Recepcionista, Administrador */}
-              {(usuario.es_recepcionista || usuario.es_administrador) && (
-                <button
-                  onClick={() => {
-                    onRegistrarSocio();
-                    setMenuUsuariosAbierto(false);
-                  }}
-                  className={`text-left px-4 py-2 whitespace-nowrap hover:bg-gray-700 ${
-                    pantallaActual === 'registrar-socio' ? 'text-yellow-400 font-bold' : 'text-white'
-                  }`}
-                >
+              {usuario.es_administrador && (
+                <button onClick={() => { onEntrenadores(); cerrarGrupo(); }} className={opcion(['entrenadores'])}>
+                  Entrenadores
+                </button>
+              )}
+              {(usuario.es_administrador || usuario.es_recepcionista) && (
+                <button onClick={() => { onRegistrarSocio(); cerrarGrupo(); }} className={opcion(['registrar-socio'])}>
                   Agregar nuevo socio
                 </button>
               )}
-
-              {/* CU20: Gestionar Perfil de Entrenador — solo Administrador.
-                  Tercera opción del menú: abre el listado, alta y baja de
-                  entrenadores (antes era una pestaña del módulo de
-                  entrenamiento y una tarjeta de Gestión de usuarios). */}
               {usuario.es_administrador && (
-                <button
-                  onClick={() => {
-                    onEntrenadores();
-                    setMenuUsuariosAbierto(false);
-                  }}
-                  className={`text-left px-4 py-2 whitespace-nowrap hover:bg-gray-700 ${
-                    pantallaActual === 'entrenadores' ? 'text-yellow-400 font-bold' : 'text-white'
-                  }`}
-                >
-                  Entrenadores
+                <button onClick={() => { onBitacora(); cerrarGrupo(); }} className={opcion(['bitacora'])}>
+                  Bitácora
                 </button>
               )}
             </div>
@@ -291,64 +274,25 @@ export const Navbar = ({
         </div>
       )}
 
-      {/* CU03: Registrar Bitácora de Auditoría — solo Administrador */}
-      {usuario.es_administrador && (
-        <button
-          onClick={onBitacora}
-          className={pantallaActual === 'bitacora' ? btnActivo : btnInactivo}
-        >
-          BITÁCORA
-        </button>
-      )}
-
-      {/* PAQUETE 2: GESTIÓN DE SOCIOS, MEMBRESÍAS Y CONTROL DE ACCESO */}
-
-      {/* Menú desplegable «Membresías»: agrupa la gestión de planes (CU05,
-          solo Administrador) y el registro de contratos (CU06, Administrador
-          y Recepcionista). Cada opción conserva su propio permiso. */}
-      {(usuario.es_administrador || usuario.es_recepcionista) && (
+      {/* MEMBRESÍAS */}
+      {tieneMembresias && (
         <div className="relative">
           <button
-            onClick={() => setMenuMembresiasAbierto((abierto) => !abierto)}
-            aria-expanded={menuMembresiasAbierto}
-            className={`${
-              pantallaActual === 'planes' || pantallaActual === 'contrato'
-                ? btnActivo
-                : btnInactivo
-            } flex items-center gap-1`}
+            onClick={() => alternarGrupo('membresias')}
+            aria-expanded={grupoAbierto === 'membresias'}
+            className={grupoBoton(['planes', 'contrato'])}
           >
-            MEMBRESÍAS
-            <span className="text-xs">{menuMembresiasAbierto ? '▲' : '▼'}</span>
+            MEMBRESÍAS <span className="text-xs">{grupoAbierto === 'membresias' ? '▲' : '▼'}</span>
           </button>
-
-          {menuMembresiasAbierto && (
-            <div className="absolute left-0 mt-1 z-20 min-w-max bg-gray-900 border border-gray-700 rounded shadow-lg flex flex-col">
-              {/* CU05: Administrar Planes de Membresía — solo Administrador */}
+          {grupoAbierto === 'membresias' && (
+            <div className="absolute left-0 right-auto mt-1 z-30 w-max max-w-[calc(100vw-1rem)] max-h-[70vh] overflow-x-hidden overflow-y-auto bg-gray-900 border border-gray-700 rounded shadow-lg flex flex-col">
               {usuario.es_administrador && (
-                <button
-                  onClick={() => {
-                    onPlanes();
-                    setMenuMembresiasAbierto(false);
-                  }}
-                  className={`text-left px-4 py-2 whitespace-nowrap hover:bg-gray-700 ${
-                    pantallaActual === 'planes' ? 'text-yellow-400 font-bold' : 'text-white'
-                  }`}
-                >
+                <button onClick={() => { onPlanes(); cerrarGrupo(); }} className={opcion(['planes'])}>
                   Gestionar planes de membresía
                 </button>
               )}
-
-              {/* CU06: Registrar Contrato de Membresía — Administrador y Recepcionista */}
               {(usuario.es_administrador || usuario.es_recepcionista) && (
-                <button
-                  onClick={() => {
-                    onRegistrarContrato();
-                    setMenuMembresiasAbierto(false);
-                  }}
-                  className={`text-left px-4 py-2 whitespace-nowrap hover:bg-gray-700 ${
-                    pantallaActual === 'contrato' ? 'text-yellow-400 font-bold' : 'text-white'
-                  }`}
-                >
+                <button onClick={() => { onRegistrarContrato(); cerrarGrupo(); }} className={opcion(['contrato'])}>
                   Registrar contrato de membresía
                 </button>
               )}
@@ -357,102 +301,102 @@ export const Navbar = ({
         </div>
       )}
 
-      {/* CU08: Punto de venta — administración y recepción */}
-      {(usuario.es_administrador || usuario.es_recepcionista) && (
-        <button onClick={onVentas} className={pantallaActual === 'ventas' ? btnActivo : btnInactivo}>
-          PUNTO DE VENTA
-        </button>
-      )}
-
-      {(usuario.es_administrador || usuario.es_recepcionista) && (
-        <button onClick={onHistorialVentas} className={pantallaActual === 'historial-ventas' ? btnActivo : btnInactivo}>
-          HISTORIAL DE VENTAS
-        </button>
-      )}
-
-      {/* CU11: Administración de categorías — solo Administrador */}
-      {usuario.es_administrador && (
-        <button onClick={onCategorias} className={pantallaActual === 'categorias' ? btnActivo : btnInactivo}>
-          CATEGORÍAS
-        </button>
-      )}
-
-      {/* CU12: Catálogo comercial — administrador gestiona, recepción consulta */}
-      {(usuario.es_administrador || usuario.es_recepcionista) && (
-        <button onClick={onProductos} className={pantallaActual === 'productos' ? btnActivo : btnInactivo}>
-          PRODUCTOS
-        </button>
-      )}
-
-      {/* CU13: Proveedores — administrador gestiona, recepción consulta */}
-      {(usuario.es_administrador || usuario.es_recepcionista) && (
-        <button onClick={onProveedores} className={pantallaActual === 'proveedores' ? btnActivo : btnInactivo}>
-          PROVEEDORES
-        </button>
-      )}
-
-            {/* CU14, CU15 y CU16: Inventario — solo administrador */}
-      {usuario.es_administrador && (
-        <>
+      {/* VENTAS */}
+      {tieneVentas && (
+        <div className="relative">
           <button
-            onClick={onCompras}
-            className={pantallaActual === 'compras' ? btnActivo : btnInactivo}
+            onClick={() => alternarGrupo('ventas')}
+            aria-expanded={grupoAbierto === 'ventas'}
+            className={grupoBoton(['ventas', 'historial-ventas', 'caja', 'metodos-pago', 'configuracion'])}
           >
-            COMPRAS
+            VENTAS <span className="text-xs">{grupoAbierto === 'ventas' ? '▲' : '▼'}</span>
           </button>
+          {grupoAbierto === 'ventas' && (
+            <div className="absolute left-0 right-auto mt-1 z-30 w-max max-w-[calc(100vw-1rem)] max-h-[70vh] overflow-x-hidden overflow-y-auto bg-gray-900 border border-gray-700 rounded shadow-lg flex flex-col">
+              {(usuario.es_administrador || usuario.es_recepcionista) && (
+                <button onClick={() => { onVentas(); cerrarGrupo(); }} className={opcion(['ventas'])}>Punto de venta</button>
+              )}
+              {usuario.es_administrador && (
+                <button onClick={() => { onHistorialVentas(); cerrarGrupo(); }} className={opcion(['historial-ventas'])}>Historial de ventas</button>
+              )}
+              {(usuario.es_administrador || usuario.es_recepcionista) && (
+                <button onClick={() => { onCaja(); cerrarGrupo(); }} className={opcion(['caja'])}>Arqueo y caja</button>
+              )}
+              {usuario.es_administrador && (
+                <button onClick={() => { onMetodosPago(); cerrarGrupo(); }} className={opcion(['metodos-pago'])}>Métodos de pago</button>
+              )}
+              {usuario.es_administrador && (
+                <button onClick={() => { onTipoCambio(); cerrarGrupo(); }} className={opcion(['configuracion'])}>Tipo de cambio</button>
+              )}
+            </div>
+          )}
+        </div>
+      )}
 
+      {/* INVENTARIO */}
+      {tieneInventario && (
+        <div className="relative">
           <button
-            onClick={onKardex}
-            className={pantallaActual === 'kardex' ? btnActivo : btnInactivo}
+            onClick={() => alternarGrupo('inventario')}
+            aria-expanded={grupoAbierto === 'inventario'}
+            className={grupoBoton(['categorias', 'productos', 'proveedores', 'compras', 'kardex', 'alertas'])}
           >
-            KARDEX
+            INVENTARIO <span className="text-xs">{grupoAbierto === 'inventario' ? '▲' : '▼'}</span>
           </button>
-
-          <button
-            onClick={onAlertas}
-            className={pantallaActual === 'alertas' ? btnActivo : btnInactivo}
-          >
-            ALERTAS
-          </button>
-        </>
+          {grupoAbierto === 'inventario' && (
+            <div className="absolute left-0 right-auto mt-1 z-30 w-max max-w-[calc(100vw-1rem)] max-h-[70vh] overflow-x-hidden overflow-y-auto bg-gray-900 border border-gray-700 rounded shadow-lg flex flex-col">
+              {usuario.es_administrador && (
+                <button onClick={() => { onCategorias(); cerrarGrupo(); }} className={opcion(['categorias'])}>Categorías</button>
+              )}
+              {(usuario.es_administrador || usuario.es_recepcionista) && (
+                <button onClick={() => { onProductos(); cerrarGrupo(); }} className={opcion(['productos'])}>Productos</button>
+              )}
+              {(usuario.es_administrador || usuario.es_recepcionista) && (
+                <button onClick={() => { onProveedores(); cerrarGrupo(); }} className={opcion(['proveedores'])}>Proveedores</button>
+              )}
+              {usuario.es_administrador && (
+                <button onClick={() => { onCompras(); cerrarGrupo(); }} className={opcion(['compras'])}>Compras</button>
+              )}
+              {usuario.es_administrador && (
+                <button onClick={() => { onKardex(); cerrarGrupo(); }} className={opcion(['kardex'])}>Kardex</button>
+              )}
+              {usuario.es_administrador && (
+                <button onClick={() => { onAlertas(); cerrarGrupo(); }} className={opcion(['alertas'])}>Alertas</button>
+              )}
+            </div>
+          )}
+        </div>
       )}
 
-      {usuario.es_administrador && (
-        <button onClick={onMetodosPago} className={pantallaActual === 'metodos-pago' ? btnActivo : btnInactivo}>MÉTODOS DE PAGO</button>
-      )}
-
-      {(usuario.es_administrador || usuario.es_recepcionista) && (
-        <button onClick={onCaja} className={pantallaActual === 'caja' ? btnActivo : btnInactivo}>
-          ARQUEO Y CAJA
+      {/* ENTRENAMIENTO: el contenido interno cambia según el rol. */}
+      {tieneEntrenamiento && <div className="relative">
+        <button
+          onClick={() => alternarGrupo('entrenamiento')}
+          aria-expanded={grupoAbierto === 'entrenamiento'}
+          className={grupoBoton(['entrenamiento'])}
+        >
+          ENTRENAMIENTO <span className="text-xs">{grupoAbierto === 'entrenamiento' ? '▲' : '▼'}</span>
         </button>
-      )}
-
-      {/* Configuración general: solo Administrador */}
-      {usuario.es_administrador && (
-        <button onClick={onTipoCambio} className={pantallaActual === 'configuracion' ? btnActivo : btnInactivo}>
-          CONFIGURACIÓN
-        </button>
-      )}
-
-      {/* PAQUETE 4: ENTRENAMIENTO (CU17–CU20)
-          Ejercicios, rutinas, asignación a socios y perfil de entrenadores.
-          El Socio también entra, pero en modo solo lectura (ve sus rutinas
-          asignadas y el catálogo); el alta la controla el backend. */}
-      <button
-        onClick={onEntrenamiento}
-        className={pantallaActual === 'entrenamiento' ? btnActivo : btnInactivo}
-      >
-        ENTRENAMIENTO
-      </button>
+        {grupoAbierto === 'entrenamiento' && (
+          <div className="absolute left-0 right-auto mt-1 z-30 w-max max-w-[calc(100vw-1rem)] max-h-[70vh] overflow-x-hidden overflow-y-auto bg-gray-900 border border-gray-700 rounded shadow-lg flex flex-col">
+            <button onClick={() => { onEntrenamiento(); cerrarGrupo(); }} className={opcion(['entrenamiento'])}>
+              {usuario.es_socio && !usuario.es_administrador && !usuario.es_entrenador
+                ? 'Ver mi entrenamiento asignado'
+                : usuario.es_entrenador && !usuario.es_administrador
+                  ? 'Ejercicios, rutinas y asignación'
+                  : 'Gestionar entrenamiento'}
+            </button>
+          </div>
+        )}
+      </div>}
 
       <button
         onClick={() => {
           // Cierre manual: también limpia la marca de inactividad.
           limpiarSesion();
-
           window.location.reload();
         }}
-        className="bg-red-600 px-3 py-1 ml-auto rounded font-bold"
+        className="bg-red-600 px-3 py-2 ml-auto rounded font-bold hover:bg-red-700"
       >
         CERRAR SESIÓN
       </button>
